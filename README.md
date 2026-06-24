@@ -127,20 +127,6 @@ Then in Chrome:
 3. Click **Load unpacked**
 4. Select the `dist/` folder
 
----
-
-## Roadmap
-
-- [x] Chrome Extension scaffold (MV3)
-- [x] Content extraction + dwell time tracking
-- [ ] TF.js USE embeddings
-- [ ] Cosine similarity matrix
-- [ ] MST + DFS traversal chain
-- [ ] UMAP + HDBSCAN clustering
-- [ ] Multimodal NN + contrastive training
-- [ ] Envelope interaction (drag to focus)
-- [ ] Session snapshots + restore
-- [ ] Chrome Web Store release
 
 ---
 
