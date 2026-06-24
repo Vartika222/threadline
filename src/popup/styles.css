@@ -1,0 +1,373 @@
+/* THREADLINE — styles.css
+   MetaMask-inspired dense dark UI.
+   Design language: precision tool, not consumer app.
+*/
+
+:root {
+  --bg-primary:    #0f0f1a;
+  --bg-secondary:  #1a1a2e;
+  --bg-card:       #16213e;
+  --accent:        #7C3AED;
+  --accent-light:  #8B5CF6;
+  --accent-glow:   rgba(124, 58, 237, 0.2);
+  --cyan:          #06B6D4;
+  --text-primary:  #F1F5F9;
+  --text-secondary:#94A3B8;
+  --text-muted:    #475569;
+  --border:        rgba(255,255,255,0.06);
+  --border-accent: rgba(124, 58, 237, 0.4);
+  --success:       #10B981;
+  --error:         #EF4444;
+  --radius:        8px;
+  --radius-sm:     4px;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  width: 360px;
+  min-height: 480px;
+  max-height: 600px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: 'Inter', 'SF Pro Display', -apple-system, sans-serif;
+  font-size: 13px;
+  overflow: hidden;
+}
+
+/* ── HEADER ───────────────────────────────────────── */
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-secondary);
+}
+
+.logo {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.logo-mark {
+  font-size: 18px;
+  color: var(--accent);
+  line-height: 1;
+}
+
+.logo-text {
+  font-weight: 700;
+  font-size: 15px;
+  letter-spacing: -0.3px;
+  color: var(--text-primary);
+}
+
+.snapshot-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.snapshot-btn:hover {
+  border-color: var(--accent-light);
+  color: var(--text-primary);
+}
+
+/* ── MAIN ─────────────────────────────────────────── */
+
+.main {
+  padding: 14px 16px;
+  overflow-y: auto;
+  max-height: 540px;
+}
+
+/* ── IDLE VIEW ────────────────────────────────────── */
+
+.tab-count {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  margin-bottom: 12px;
+}
+
+.tab-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 14px;
+  max-height: 360px;
+  overflow-y: auto;
+}
+
+.tab-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  transition: border-color 0.15s;
+}
+.tab-item:hover { border-color: var(--border-accent); }
+
+.favicon {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  border-radius: 2px;
+}
+
+.tab-title {
+  font-size: 12px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ── SORT BUTTON ──────────────────────────────────── */
+
+.sort-button {
+  width: 100%;
+  padding: 11px;
+  background: var(--accent);
+  border: none;
+  border-radius: var(--radius);
+  color: white;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+  letter-spacing: 0.1px;
+  position: relative;
+  overflow: hidden;
+}
+.sort-button::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(135deg, rgba(255,255,255,0.1) 0%, transparent 60%);
+}
+.sort-button:hover {
+  background: var(--accent-light);
+  box-shadow: 0 0 20px var(--accent-glow);
+}
+.sort-button:active { transform: scale(0.99); }
+
+/* ── SORTING VIEW ─────────────────────────────────── */
+
+.sorting-view {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 48px 16px;
+  gap: 16px;
+  text-align: center;
+}
+
+.spinner {
+  width: 36px;
+  height: 36px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.progress-text {
+  font-size: 13px;
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.progress-sub {
+  font-size: 11px;
+  color: var(--text-muted);
+  max-width: 240px;
+}
+
+/* ── SORTED VIEW ──────────────────────────────────── */
+
+.sorted-view { display: flex; flex-direction: column; gap: 12px; }
+
+.chain-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--text-muted);
+}
+
+/* ── CHAIN ────────────────────────────────────────── */
+
+.chain-scroll {
+  overflow-x: auto;
+  padding-bottom: 8px;
+}
+
+.chain-row {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  padding: 4px 0;
+  width: max-content;
+}
+
+.chain-card {
+  width: 80px;
+  flex-shrink: 0;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-top-width: 2px;
+  border-radius: var(--radius-sm);
+  padding: 8px 6px 6px;
+  position: relative;
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+.chain-card:hover { border-color: var(--border-accent); }
+
+.chain-card-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+.chain-favicon {
+  width: 16px;
+  height: 16px;
+  border-radius: 2px;
+}
+
+.chain-favicon-placeholder {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  opacity: 0.7;
+}
+
+.chain-title {
+  font-size: 10px;
+  color: var(--text-secondary);
+  text-align: center;
+  line-height: 1.3;
+  word-break: break-word;
+}
+
+.chain-cluster-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  margin-top: 4px;
+}
+
+.chain-connector {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  width: 24px;
+  flex-shrink: 0;
+}
+
+.chain-connector-line {
+  width: 100%;
+  height: 1px;
+  background: var(--accent);
+}
+
+.chain-similarity {
+  font-size: 8px;
+  color: var(--text-muted);
+}
+
+/* ── SORT BUTTON ──────────────────────────────────── */
+
+.sort-btn {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 12px;
+  background: var(--accent);
+  border: none;
+  border-radius: var(--radius);
+  color: white;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, box-shadow 0.15s;
+}
+.sort-btn:hover:not(:disabled) {
+  background: var(--accent-light);
+  box-shadow: 0 0 0 4px var(--accent-glow);
+}
+.sort-btn:disabled {
+  background: var(--bg-card);
+  color: var(--text-muted);
+  cursor: not-allowed;
+}
+.sort-btn-icon { font-size: 14px; }
+
+/* ── ACTION ROW ───────────────────────────────────── */
+
+.action-row {
+  display: flex;
+  gap: 8px;
+}
+
+.apply-btn {
+  flex: 1;
+  padding: 10px;
+  background: var(--accent);
+  border: none;
+  border-radius: var(--radius);
+  color: white;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.apply-btn:hover { background: var(--accent-light); }
+
+.cancel-btn {
+  padding: 10px 16px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text-secondary);
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.cancel-btn:hover { border-color: var(--border-accent); color: var(--text-primary); }
+
+/* ── MISC ─────────────────────────────────────────── */
+
+.error {
+  font-size: 11px;
+  color: var(--error);
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.2);
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+}
+
+.chain-empty {
+  font-size: 12px;
+  color: var(--text-muted);
+  text-align: center;
+  padding: 24px;
+}

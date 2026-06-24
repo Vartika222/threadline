@@ -1,0 +1,24 @@
+{
+  "name": "threadline",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A semantic relatability engine for the ADHD browser.",
+  "scripts": {
+    "dev": "vite build --watch --mode development && node scripts/copy-extension-files.js",
+    "build": "vite build && node scripts/copy-extension-files.js",
+    "build:verify": "npm run build && node scripts/verify-build.js",
+    "test": "node tests/graph.test.js && node tests/nn.test.js && node tests/clusterer.test.js"
+  },
+  "dependencies": {
+    "@tensorflow-models/universal-sentence-encoder": "^1.3.3",
+    "@tensorflow/tfjs": "^4.21.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "umap-js": "^1.4.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.1",
+    "vite": "^5.4.8"
+  }
+}
