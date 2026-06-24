@@ -3,15 +3,13 @@
 > **A semantic relatability engine for the ADHD browser.**  
 > Sorts your tabs not into buckets — but into a *thread*. The order your thoughts actually follow.
 
-![Threadline popup UI](assets/preview.png)
-
 ---
 
 ## The Problem
 
-Every tab you open is a thought. Most tab managers treat your tabs like a pile. They sort them into categories — "Work", "Research", "Shopping" — and call it organisation.
+Every tab you open is a thought. Most tab managers treat tabs like a pile. They sort them into categories — "Work", "Research", "Shopping" — and call it organisation.
 
-But that's not how thinking works, especially with ADHD. You open a tab about React performance. That leads to V8 internals. That links to a memory management talk. That references a Rust blog. Four tabs in, you've lost the thread of what you were originally doing.
+But that's not how thinking works. You open a tab about React performance. That leads to V8 internals. That links to a memory management talk. That references a Rust blog. Four tabs in, you've lost the thread of what you were originally doing.
 
 The browser offers no path back.
 
@@ -65,32 +63,6 @@ A **multimodal neural network** combines content embeddings with behavioural fea
 
 ---
 
-## Architecture
-
-```
-Chrome Extension (Manifest V3)
-│
-├── manifest.json          Extension config, permissions
-├── content_script.js      Per-tab: extracts content, tracks dwell time
-├── background.js          Service worker: coordinates state & events
-│
-└── src/
-    ├── popup/
-    │   ├── App.jsx        Three-state UI: idle → sorting → sorted
-    │   ├── TabChain.jsx   Horizontal scrollable relatability chain
-    │   ├── SortButton.jsx
-    │   └── styles.css     Dark dense UI (MetaMask-inspired)
-    │
-    └── ml/
-        ├── pipeline.js    Orchestrator: embed → graph → cluster → sort
-        ├── embedder.js    Universal Sentence Encoder via TF.js
-        ├── graph.js       Cosine similarity + MST + DFS traversal
-        ├── clusterer.js   UMAP + HDBSCAN topic clustering
-        └── nn.js          Multimodal NN + contrastive training loop
-```
-
----
-
 ## Tech Stack
 
 | Layer | Technology | Why |
@@ -136,7 +108,7 @@ We don't have labelled training data ("tab A and tab B are definitely related").
 
 ```bash
 # Clone the repo
-git clone https://github.com/yourusername/threadline
+git clone https://github.com/Vartika222/threadline
 cd threadline
 
 # Install dependencies
