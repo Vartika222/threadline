@@ -21,6 +21,9 @@ const REQUIRED = [
   'background.js',
   'content_script.js',
   'popup.html',
+  'offscreen.html',
+  'blocked.html',
+  'blocked.js',
   // Icons referenced in manifest
   'icons/icon16.png',
   'icons/icon48.png',
@@ -73,6 +76,9 @@ try {
     ['action.default_popup', !!manifest.action?.default_popup, 'action.default_popup is missing'],
     ['permissions includes tabs',    manifest.permissions?.includes('tabs'),    'tabs permission missing'],
     ['permissions includes storage', manifest.permissions?.includes('storage'), 'storage permission missing'],
+    ['permissions includes tabGroups', manifest.permissions?.includes('tabGroups'), 'tabGroups permission missing'],
+    ['permissions includes offscreen', manifest.permissions?.includes('offscreen'), 'offscreen permission missing'],
+    ['permissions includes alarms', manifest.permissions?.includes('alarms'), 'alarms permission missing'],
     ['CSP allows WebAssembly', manifest.content_security_policy?.extension_pages?.includes('wasm-unsafe-eval'), 'the language model needs wasm-unsafe-eval'],
   ];
 

@@ -19,19 +19,11 @@
 
 import React, { useState } from 'react';
 import { computeRecencyNorm, formatIdleDuration } from '../ml/recency.js';
+import { CATEGORIES } from '../ml/categories.js';
 
-// Cluster colours — one per topic group. Exported so other components
+// One colour per category. Exported so other components
 // (e.g. App.jsx's cluster legend) stay visually consistent with the chain.
-export const CLUSTER_COLORS = [
-  '#7C3AED', // violet
-  '#06B6D4', // cyan
-  '#10B981', // emerald
-  '#F59E0B', // amber
-  '#EF4444', // red
-  '#8B5CF6', // purple
-  '#EC4899', // pink
-  '#3B82F6', // blue
-];
+export const CLUSTER_COLORS = CATEGORIES.map(category => category.hex);
 
 export default function TabChain({ chain, clusters, onReorder }) {
   const [dragIndex, setDragIndex] = useState(null);
@@ -112,7 +104,7 @@ export default function TabChain({ chain, clusters, onReorder }) {
                   </span>
                   {isStale && <span className="chain-stale-badge">idle</span>}
                 </div>
-                <div className="chain-cluster-dot" style={{ background: color }} />
+                <div className="chain-subcategory" style={{ color }}>{tab.placement?.subcategory}</div>
               </div>
 
               {/* Connector between cards */}
@@ -122,9 +114,9 @@ export default function TabChain({ chain, clusters, onReorder }) {
                     className="chain-connector-line"
                     style={{ opacity: 0.3 + (similarity || 0.5) * 0.7 }}
                   />
-                  {similarity !== undefined && (
+                  {similarity != null && (
                     <div className="chain-similarity">
-                      {Math.round((similarity || 0) * 100)}%
+                      {Math.round(similarity * 100)}%
                     </div>
                   )}
                 </div>

@@ -389,7 +389,9 @@ export function reannotateChain(chain, simMatrix) {
     const next = chain[pos + 1];
     return {
       ...tab,
-      similarityToNext: next ? simMatrix[tab.originalIndex][next.originalIndex] : null,
+      similarityToNext: next && next.placement?.category === tab.placement?.category
+        ? simMatrix[tab.originalIndex][next.originalIndex]
+        : null,
     };
   });
 }

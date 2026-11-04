@@ -10,7 +10,7 @@ export default function SortButton({ onClick, disabled = false }) {
   return (
     <button className="sort-btn" onClick={onClick} disabled={disabled}>
       <span className="sort-btn-icon">⬡</span>
-      Sort by relatability
+      Sort now
     </button>
   );
 }

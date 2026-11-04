@@ -51,6 +51,8 @@ console.log('\nCopying extension files to dist/...');
 copyFile(path.join(ROOT, 'manifest.json'),       path.join(DIST, 'manifest.json'));
 copyFile(path.join(ROOT, 'background.js'),        path.join(DIST, 'background.js'));
 copyFile(path.join(ROOT, 'content_script.js'),    path.join(DIST, 'content_script.js'));
+copyFile(path.join(ROOT, 'blocked.html'),         path.join(DIST, 'blocked.html'));
+copyFile(path.join(ROOT, 'blocked.js'),           path.join(DIST, 'blocked.js'));
 copyDir( path.join(ROOT, 'icons'),                path.join(DIST, 'icons'));
 
 // The WebAssembly runtime that runs the language model. Transformers.js would

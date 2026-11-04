@@ -329,6 +329,21 @@ body {
   background: rgba(16, 185, 129, 0.08);
 }
 
+.chain-subcategory {
+  font-size: 9px;
+  text-align: center;
+  margin-top: 2px;
+}
+
+.auto-sort-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
 .personalise-toggle {
   display: flex;
   align-items: center;

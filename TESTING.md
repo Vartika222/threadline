@@ -53,28 +53,28 @@ Open these nine tabs **in this mixed-up order** (so there is real work to do):
 | 8 | Food | https://en.wikipedia.org/wiki/Curry |
 | 9 | Japan | https://en.wikipedia.org/wiki/Tokyo |
 
-Then click the Threadline icon and press **Sort by relatability**.
-
-**Works without internet:** the language model ships with the extension. Expect
-about 2 seconds for the sort in a new popup, and about 1 second for another sort in
-the same popup (measured on an M4 Mac). To check, turn off your Wi-Fi and sort.
+Don't click anything. Within a few seconds of each page loading, it should move into
+a named, coloured tab group.
 
 Expected result:
-- A chain where the three React tabs sit together, the three food tabs together
-  and the three Japan tabs together (the order of the groups can vary).
-- Usually three or four colours, with a legend of names (the most distinctive
-  words in each group). In a test run: "React & Useeffect", "Sourdough & Carbonara",
-  "Tokyo & Kyoto", and Shinkansen alone in its own group. Sorting the same tabs
-  again gives the same result, even after their order changes.
-- Press **Apply Order** and check Chrome's tab strip rearranges to match.
+- Named groups in the tab strip. React and Wikipedia tabs land in **Study**, except
+  any page the model places elsewhere.
+- Click a tab and the toolbar icon shows its category, such as `ST`. Hover over it
+  for the subcategory.
+- Open the popup and press **Sort now**. It rearranges without asking for approval.
+  Press **Undo** and everything goes back.
+- Open `https://www.youtube.com/`, then a lecture and a music video. The homepage and
+  music go to **Entertainment**, and the lecture to **Study**.
+- Works with no internet, because the language model ships with the extension. To
+  check, turn off your Wi-Fi and open a saved page or press **Sort now**.
 
-Note down: did the three groups come out contiguous? How many seconds did the
-first sort take, and the second?
+Note down: which tabs landed in the wrong group? That's the most useful thing to send
+back.
 
 ## 5. Test the learning loop
 
-1. Sort again, tick **Personalise sorting (experimental)** under the chain, then
-   **drag** a card to a new position.
+1. Press **Sort now**, tick **Personalise sorting (experimental)** under the chain,
+   then **drag** a card to a new position.
 2. A counter appears: `n/15 training examples`. Each drag usually adds 2 to 4
    examples (the pairs the dragged tab joined and left).
 3. Keep dragging until it reaches 15. Expected: the message changes to "Your
@@ -107,6 +107,14 @@ chrome.storage.local.get('implicit_training_candidates', d => console.log(d))
 
 ## 7. Other checks
 
+- **Focus mode:** in the service worker console, run `threadline.startFocus('Study', 5)`.
+  Other groups collapse and the badge shows `5m`. Click a tab in another group and the
+  badge shows `!`. Run `threadline.setStrictFocus(true)`, click one again, and you get
+  a "Back to Study" page. Run `threadline.endFocus()` when done.
+- **Automatic sorting off:** untick **Sort tabs automatically** in the popup, then open
+  a tab. It should stay where it is.
+- **Your own groups:** make a tab group yourself with another name. It should be left
+  alone.
 - **Save snapshot:** click **↓ Save** in the popup, then run in the service
   worker console: `chrome.storage.local.get('snapshots', console.log)`. Expect
   one snapshot with your tab list. (There is no screen to view snapshots yet.)
@@ -124,7 +132,7 @@ npm run eval:model
 This runs the bundled model in Node, scores Threadline's chain against MST,
 greedy and random orderings on 48 labelled tabs, and writes the table to
 `eval/results-minilm.md`. Compare it with the table in the README's "Evaluation"
-section.
+section. `npm run eval:categories` does the same for category accuracy.
 
 ## What to send back if something fails
 

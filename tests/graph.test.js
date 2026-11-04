@@ -272,11 +272,19 @@ console.log('\n── reannotateChain ──────────────
 
 test('after a reorder, each tab reports similarity to its new neighbour', () => {
   const matrix = [[1, 0.9, 0.2], [0.9, 1, 0.5], [0.2, 0.5, 1]];
-  const chain = [{ originalIndex: 0 }, { originalIndex: 1 }, { originalIndex: 2 }];
+  const placement = { category: 'Study' };
+  const chain = [{ originalIndex: 0, placement }, { originalIndex: 1, placement }, { originalIndex: 2, placement }];
   const moved = reannotateChain([chain[1], chain[0], chain[2]], matrix);
   assertClose(moved[0].similarityToNext, 0.9);
   assertClose(moved[1].similarityToNext, 0.2);
   assert(moved[2].similarityToNext === null, 'Last item should have null similarityToNext');
+});
+
+test('no percentage between tabs in different categories', () => {
+  const out = reannotateChain(
+    [{ originalIndex: 0, placement: { category: 'Study' } }, { originalIndex: 1, placement: { category: 'News' } }],
+    [[1, 0.4], [0.4, 1]]);
+  assert(out[0].similarityToNext === null, 'expected no percentage');
 });
 
 test('reannotateChain keeps the other tab fields and does not mutate its input', () => {

@@ -146,51 +146,39 @@ fine-tuned version has beaten the pretrained one on tabs.
 `annotateChain` records the similarity to the *next* tab, which the UI uses for
 the connector opacity and the `%` label. `reannotateChain` redoes that after a drag.
 
-### 4c. `clusterer.js` — embeddings → topic colour groups
+### 4c. `categories.js` — a category and subcategory for each tab
 
-Pipeline: `embeddings → cosine similarities → agglomerative clustering →
-best silhouette`.
+`classifyTabs` decides in three steps. `classifyByRules` handles the first two, with no
+model:
 
-- **`agglomerate`**: average-linkage clustering. Every tab starts alone, and the
-  two groups most similar on average merge until one is left. The similarity
-  between a merged group and the others is updated by a size-weighted average
-  (Lance-Williams) rather than recomputed. Each step is a candidate clustering.
-- **`silhouetteScore`**: how much closer each tab is to its own group than to the
-  next-nearest one, using `1 - cosine` as distance. It picks among k =
-  2..min(8, N/2).
-- **`SAME_TOPIC_SIMILARITY`**: if even the final merge joins groups at least this
-  alike, everything is one topic. It's tied to the model's scale and is a trade-off:
-  at 0.3 close topics stay apart, but a broad single topic usually splits in two.
-- **Three tabs or fewer** form one group.
-- **No randomness**, and `canonicalTabOrder` in `pipeline.js` removes any
-  dependence on tab order, so the same tabs always get the same groups.
-- **What this replaced**: UMAP + seeded k-means, which usually found 2 or 3 groups
-  however many topics were open. ARI on real page text at 20 tabs rose from about
-  0.28 to 0.82, before the model change. `CONCEPT_CLUSTER.md` still covers UMAP and k-means as background.
+- **Mixed sites.** YouTube's homepage is Entertainment. A video on a channel in
+  `STUDY_CHANNELS` is Study. Any other video goes to the model, falling back to
+  Entertainment if it isn't confident. A search goes to the model using only the query.
+- **`KNOWN_SITES`.** Host → category and subcategory, also trying parent domains. Block
+  pages (`REFUSED_PAGE`) on unknown sites go to Unsure rather than being guessed from.
+- **The model.** `closestDescription` compares the tab with every subcategory's written
+  descriptions. Below `MIN_CONFIDENCE` it goes to Life & Other › Unsure.
 
-### 4d. `labeler.js` — cluster index → human-readable name *(new)*
+**What this replaced**: agglomerative clustering, which grouped pages with similar
+wording but had no idea what "streaming" or "shopping" meant. On real tabs the groups
+looked random. A network trained on `dmoz.csv` scored 63% against 90% for the
+descriptions, because dmoz has no social or streaming labels (`training/README.md`).
 
-Turns "cluster 2" into "React Hooks" using **TF-IDF, computed per cluster
-rather than per tab**.
+### 4d. Automatic sorting and focus mode, in `background.js`
 
-- Each cluster's tabs are concatenated into one "document"; term frequency
-  (TF) is counted within that document.
-- **IDF** (inverse document frequency) is computed across *clusters*, not
-  tabs: `idf(term) = log(numClusters / clustersContainingTerm) + 1`. A term
-  that shows up in every cluster (generic web noise) gets driven toward a
-  low but never-zero weight (the `+1` smoothing prevents it vanishing
-  entirely and crashing the sort). A term unique to one cluster gets
-  boosted — that's precisely "what makes this cluster different from the
-  others," which is what you want in a label.
-- A small hardcoded stopword list removes function words ("the", "and") and
-  generic web noise ("page", "www", "html") that would otherwise dominate
-  every cluster's word counts regardless of actual topic.
-- **Honest limitation, stated in the file**: this is bag-of-words counting,
-  not a language model. It doesn't know "hooks" and "useState" are related
-  React concepts — it just counts co-occurring tokens. At small N (a handful
-  of tabs per cluster) that's enough to produce a useful label; it is not a
-  summarisation system, and you shouldn't expect it to synthesise a concept
-  no single word in the corpus expresses.
+- **`runAutoSort`** runs shortly after a tab loads or its text arrives. It takes tabs on
+  a URL it hasn't placed yet, and asks the hidden page (`src/offscreen/main.js`) to
+  classify them, because a service worker can't reliably run the model. Remembering the
+  URL in `tab_placements` is what lets a tab you moved by hand stay put.
+- **`placeTabInGroup`** finds or creates the category's group, skips groups the user
+  made, and keeps subcategory order. `editTabs` retries while Chrome refuses edits during
+  a tab drag.
+- **`applySort`** handles **Sort now**, and **`undoLastSort`** restores from
+  `saveUndoState`.
+- **Focus mode** stores `{ category, endsAt, allowedHosts }`, so it survives a worker
+  restart. `enforceFocus` runs on tab activation and after sorting. Strict focus is opt-in,
+  Unsure tabs are never blocked, and the blocked page can always allow a site or end
+  focus, because the classifier will be wrong sometimes.
 
 ### 4e. `recency.js` — "how long since this tab was touched" *(new)*
 
@@ -269,9 +257,8 @@ tab-strip order can't affect anything. Then it runs, in order:
 2. Drain implicit tab-switch-burst candidates into training examples
 3. Build the cosine similarity matrix
 4. If personalisation is on and weights exist, use `scoreAllPairs` instead
-5. `buildChainOrder`, then annotate similarities
-6. Cluster (agglomerative)
-7. Label each cluster (TF-IDF)
+5. `classifyTabs` gives each tab a category and subcategory
+6. `orderWithinCategories` orders by category, then subcategory, then `buildChainOrder`
 
 Returns `{ chain, clusters, clusterLabels, simMatrix, method, implicitExampleCount }`.
 `method` is `'cosine'` or `'personalised'`, and the popup uses it to report what
@@ -356,16 +343,15 @@ and the `chrome.tabs` event hooks, plus the small runner the newer files use.
 | File | What it proves |
 |---|---|
 | `graph.test.js` | MST has N-1 edges, DFS visits every node once, `buildChainOrder` returns every tab once and is at least as strong as MST or greedy alone, local search never lowers the total, 200 tabs finish in under a second |
-| `clusterer.test.js` | One label per tab, distinct topics get distinct clusters, handles one or two tabs |
-| `kselection.test.js` | The right number of groups for 1, 2, 3 and 5 separate topics; never above 8 or N/2; deterministic; silhouette scores behave on perfect, wrong and singleton clusterings |
+| `categories.test.js` | The rules with no model: your tabs, YouTube homepage vs video vs study channel, searches by query, block pages, known sites naming real categories |
+| `sorting.test.js` | Automatic grouping, tabs moved by hand staying put, user groups left alone, retries during drags, Sort now, Undo, focus mode in gentle and strict form |
 | `retrain.test.js` | `shouldRetrain`: trains at 15, still triggers when the count jumps past a checkpoint (13 → 16), waits for 5 new examples between trainings, keeps training past the 200-example storage cap |
 | `personalise.test.js` | Off by default; with no adjustment it equals cosine; always symmetric and on the 0-1 scale; training moves scores the right way, is deterministic and fast; inconsistent corrections stay near cosine |
 | `embedder.test.js` | The real bundled model loads with no network, gives unit-length 384-dim vectors, ranks related text above unrelated, survives blank text |
-| `determinism.test.js` | The same tabs always get identical cluster assignments (k-means is seeded), whatever order they arrive in (`canonicalTabOrder`) |
+| `determinism.test.js` | The same tabs always give the same chain, whatever order they arrive in (`canonicalTabOrder`) |
 | `feedback.test.js` | Drag-to-pair derivation: new adjacency → positive, broken adjacency → negative, untouched pairs → no signal |
 | `implicitFeedback.test.js` | Tab-switch pairs become one positive + one weak negative, closed tabs are dropped, embeddings are stored rounded and capped at 200 examples |
 | `recency.test.js` | Recency bounds (1 at t=0, 0 at/past the cap, ~0.5 halfway), idle-duration formatting |
-| `labeler.test.js` | Distinct clusters get distinct on-topic labels, stopwords never leak into a label, no crash on empty/single-cluster input |
 | `background.test.js` | 20 concurrent tab events lose no data (storage write queue), bad URLs don't throw, transitions and implicit candidates are counted, previous-active tab survives a worker restart, tabs already open at install are registered, pruned and given the content script, navigating forgets the old page's text, Apply Order handles pinned and closed tabs |
 | `contentScript.test.js` | Runs the real `content_script.js` on a fake page and clock: dwell time counts once in any order of blur, focus and visibility events; CSS and scripts stay out of the extracted text |
 | `eval.test.js` | The evaluation metrics (neighbour agreement, runs per topic, adjusted Rand index) against hand-computed values |
@@ -387,16 +373,16 @@ and that `dist/` contains everything Chrome needs.
      training examples right now, using the embeddings we just computed
    - `buildSimilarityMatrix` → cosine matrix
    - if personalisation is on and trained: `scoreAllPairs` replaces it
-   - `buildChainOrder` → `annotateChain` → the final chain order
-   - `clusterTabs` → `labelClusters` → colour + name per topic group
+   - `classifyTabs` → category and subcategory per tab
+   - `orderWithinCategories` → the final chain order
 3. `App` renders `TabChain` (draggable cards) + `ClusterLegend` +
    `LearningStatus`.
 4. If you drag a card: `handleReorder` → `deriveTrainingPairs` →
    `storeTrainingExample` (persisted to `chrome.storage.local`) →
    `maybeRetrain` (if personalisation is on, trains once 15 examples exist, then
    after every 5 new ones).
-5. "Apply Order" → `chrome.tabs.move` puts your actual browser tabs in that
-   order.
+5. `applyToTabStrip` → `APPLY_SORT` moves your actual browser tabs straight away, into
+   named groups. There is no approval step.
 
 Meanwhile, **independent of any popup interaction**, `background.js` is
 always watching `onActivated` events, incrementing `transitionCount`, and

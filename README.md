@@ -1,14 +1,11 @@
 # ⬡ Threadline
 
-> **An on-device Chrome extension that sorts your open tabs into a thread** — an
-> order where each tab sits next to the one most related to it — and learns what
-> "related" means to you.
+> **An on-device Chrome extension that sorts your tabs by itself** into named groups
+> like Study, Social and Shopping & Art, as soon as they load.
 
-Most tab managers sort tabs into buckets ("Work", "Shopping"). Threadline asks a
-different question: *in what order do these tabs relate to each other?* Four
-tabs in — React performance, V8 internals, a memory-management talk, a Rust
-blog — you've lost the thread of what you were doing. Threadline lays the tabs
-out along that thread and colour-codes the topics.
+Most tabs pile up in the order you opened them. Threadline moves each one into a
+named, coloured Chrome tab group for its category, with no clicking, and keeps
+related tabs next to each other inside the group.
 
 **Status:** working prototype, loaded unpacked in Chrome. Not published on the
 Chrome Web Store.
@@ -17,40 +14,53 @@ Chrome Web Store.
 
 ## How it works
 
-1. **Extract.** A content script reads each page's title, meta description,
-   top headings and first paragraph, and tracks how long the tab is visible.
-2. **Embed.** A pretrained neural network, `all-MiniLM-L6-v2` (a small BERT-style
-   transformer, run with Transformers.js on WebAssembly), turns each tab's text
-   into a 384-dimensional vector.
-3. **Compare.** Pairwise cosine similarity gives an N×N similarity matrix.
-4. **Chain.** Two candidate orders are built: a maximum spanning tree (Kruskal
-   with union-find) walked depth-first, and the best greedy "go to the most
-   similar tab" walk. Local search polishes both, reversing stretches and moving
-   short runs of tabs, and the chain with the higher total similarity between
-   neighbours wins.
-5. **Group.** Agglomerative clustering merges the most similar tabs step by step,
-   and the silhouette score picks where to stop (2 to 8 groups, or one group if
-   everything is about the same thing). TF-IDF names each topic. Same tabs in →
-   same result out, whatever order they are in.
-6. **Personalise (optional, off by default).** Turn on **Personalise sorting
-   (experimental)** in the popup and Threadline learns one weight per embedding
-   dimension on top of cosine similarity:
+1. **Read.** A content script reads each page's title, meta description, top
+   headings and first paragraph, plus the channel on YouTube videos.
+2. **Categorise.** Each tab gets one of 8 categories and a subcategory:
 
+   | Category | Subcategories |
+   | --- | --- |
+   | Study | Courses & Lectures, Practice & Coding Prep, Reference, Science |
+   | Work | Developer Tools, Business & Finance, Productivity, Jobs |
+   | Entertainment | Streaming, Music, Sports |
+   | Games | Browser Games, Game Stores, Gaming News |
+   | Social | Messaging, Feeds, Forums, Inspiration |
+   | Shopping & Art | Clothing, Electronics, Marketplaces, Fashion & Beauty, Art & Design, Books & Culture |
+   | News | General, Business & Tech, Sports & Other |
+   | Life & Other | Health, Home, Travel, Society, Unsure |
+
+   Three steps decide it:
+   - **Content on mixed sites.** A YouTube video is judged by its channel and title,
+     so a lecture lands in Study and the homepage in Entertainment. A Google search
+     is judged by what was searched for.
+   - **A known sites list** for common sites. This needs no model.
+   - **The language model** for everything else. A pretrained neural network,
+     `all-MiniLM-L6-v2` (run with Transformers.js on WebAssembly), compares the page
+     with written descriptions of each subcategory and takes the closest match.
+3. **Group.** The tab moves into a named, coloured tab group, in subcategory order.
+   Only tabs on a new URL are touched. Tabs you moved by hand stay put until they
+   navigate, and groups you made yourself are never changed. The toolbar badge shows
+   the active tab's category.
+4. **Chain (Sort now).** The **Sort now** button in the popup rearranges everything:
+   categories in a fixed order, and within each subcategory the strongest chain of
+   related tabs. That chain is built from the best of a maximum spanning tree walked
+   depth-first and a greedy walk, polished by local search. **Undo** restores the
+   previous arrangement.
+5. **Focus mode.** Pick a category and a duration, and the other groups collapse.
+   Opening another category shows `!` on the badge, or with strict focus enabled,
+   a "Back to Study" page offering **Allow this site** and **End focus**. Tabs marked
+   Unsure are never blocked. There's no screen for this yet. In the service worker
+   console:
+
+   ```js
+   threadline.startFocus('Study', 50)
+   threadline.setStrictFocus(true)   // off by default
+   threadline.endFocus()
    ```
-   score(a, b) = Σ (1 + adjustment[i]) × a[i] × b[i]
-   ```
-
-   Training labels come for free:
-
-   - **Drag corrections.** A tab you drag next to another becomes a positive
-     pair; a neighbour it leaves becomes a negative pair.
-   - **Tab-switch bursts.** Bouncing between the same two tabs three times, each
-     switch within five minutes of the last, queues a positive pair (an
-     "attentional residue" signal). Each one is paired with one weak negative
-     (the open tab least similar to it), so the training set isn't all positives.
-
-   It trains once 15 examples exist and again after every 5 new ones. So far it
-   has not been shown to help (see Evaluation).
+6. **Personalise (optional, off by default).** Tick **Personalise sorting
+   (experimental)** in the popup and Threadline learns from your drags and from
+   switching back and forth between two tabs. This only affects the order inside a
+   subcategory, and it hasn't been shown to help (see Evaluation).
 
 ## Privacy — what is and isn't on-device
 
@@ -67,9 +77,10 @@ Chrome Web Store.
   open (Chrome only injects it into pages loaded afterwards). Without access to
   page text there is nothing to embed. The page security policy allows
   `wasm-unsafe-eval`, which WebAssembly needs to run.
+- `tabGroups` creates the named groups, `offscreen` runs the model in a hidden page
+  so sorting can happen with the popup closed, and `alarms` runs the focus timer.
 - Dwell time, revisit and tab-switch counts are still recorded locally, but
-  nothing uses them for sorting since the neural network was removed. Recency
-  only fades idle tabs in the popup.
+  nothing uses them for sorting. Recency only fades idle tabs in the popup.
 
 ## Install and run
 
@@ -92,17 +103,31 @@ Run it yourself (works offline):
 
 ```bash
 npm run eval        # offline lexical stand-in: checks the harness itself
-npm run eval:model  # the real model
+npm run eval:model  # chain quality, with the real model
+npm run eval:categories  # category accuracy, with the real model
 ```
 
-`eval/tabs.json` holds 48 labelled tabs (8 topics × 6), with short descriptions
-as their text. Each trial draws a random subset of tabs and scores:
+**Categories.** `eval/category_sites.json` holds 83 real sites with hand-assigned
+categories, captured from their homepages:
 
-- **Neighbour agreement** — share of adjacent tabs in the chain from the same
-  topic.
-- **Runs per topic** — how fragmented each topic is along the chain (1 is ideal).
-- **Clustering ARI** — how well the groups recover the true topics (1 is perfect,
-  0 is chance).
+| Test | Correct |
+| --- | ---: |
+| Sites, language model alone (no known sites list) | **78 of 83 (94%)** |
+| YouTube videos by title | 22 of 22 |
+| Google searches | 8 of 9 |
+
+Treat these as optimistic. I chose the test sites, they're homepages, and I adjusted
+a description after seeing the search and video tests, which I also wrote by hand.
+Those two tests are small. With the known sites list the site score reaches 100%,
+but most of those sites are on the list, so that number says nothing. Mistakes on the
+sites were art sites going to Social and government or health sites going to News.
+
+A small neural network trained on `dmoz.csv` (1.2M website descriptions) got only
+63% on held-out real sites, against 90% for the descriptions on the same sites, so it
+isn't used. See [training/README.md](training/README.md).
+
+**Chain quality.** `eval/tabs.json` holds 48 labelled tabs (8 topics × 6), with short
+descriptions as their text. Each trial draws a random subset of tabs and scores:
 
 **Short descriptions, `eval/tabs.json`** (100 trials per size, mean ± standard error):
 
@@ -121,40 +146,14 @@ as their text. Each trial draws a random subset of tabs and scores:
 | 30 | greedy-nn alone | 0.653 ± 0.005 | 1.385 ± 0.020 |
 | 30 | random | 0.106 ± 0.005 | 3.377 ± 0.018 |
 
-| Tabs | Clustering ARI ↑ |
-| ---: | ---: |
-| 10 | 0.514 ± 0.026 |
-| 20 | 0.690 ± 0.017 |
-| 30 | 0.722 ± 0.012 |
+**Real page text** (100 trials per size). A separate check on 40 real pages (8 topics
+× 5, from Wikipedia, react.dev, MDN and Python docs). This dataset isn't in the repo.
 
-**Real page text** (100 trials per size). Those descriptions are also what the
-methods were first compared on, so as a separate check I loaded 40 real pages
-(8 topics × 5, from Wikipedia, react.dev, MDN and Python docs) and extracted their
-text with the content script. This dataset isn't in the repo.
-
-| Tabs | Threadline | MST alone | Greedy alone | Runs per topic (Threadline / MST) | ARI |
-| ---: | ---: | ---: | ---: | ---: | ---: |
-| 10 | 0.404 | 0.372 | 0.392 | 1.01 / 1.06 | 0.595 |
-| 20 | 0.632 | 0.595 | 0.624 | 1.02 / 1.11 | 0.902 |
-| 30 | 0.750 | 0.715 | 0.737 | 1.03 / 1.16 | 0.929 |
-
-**Close topics** are where the model choice matters most. This uses 49 real pages
-on 5 pairs such as WWI vs WWII and planets vs stars, with 5 tabs from each topic
-(300 trials), comparing the model this project used before:
-
-| Model | Neighbour agreement | Chain keeps both topics unbroken | Topics given separate colours | ARI |
-| --- | ---: | ---: | ---: | ---: |
-| Universal Sentence Encoder (old) | 0.775 | 60% | 0% | 0.000 |
-| **all-MiniLM-L6-v2** | **0.797** | **80%** | **100%** | **0.697** |
-
-These numbers can't all be taken at face value: the single-topic cut-off and the
-choice of model were made after looking at these test sets, so a fresh test set
-might score somewhat lower.
-
-**A broad single topic is usually split.** With 5 tabs on one broad topic such as
-cooking, the groups came out right only 17% of the time, nearly always as 2 groups.
-Lowering the cut-off fixes that but merges close topics. See
-`SAME_TOPIC_SIMILARITY` in `src/ml/clusterer.js`. The chain order isn't affected.
+| Tabs | Threadline | MST alone | Greedy alone | Runs per topic (Threadline / MST) |
+| ---: | ---: | ---: | ---: | ---: |
+| 10 | 0.404 | 0.372 | 0.392 | 1.01 / 1.06 |
+| 20 | 0.632 | 0.595 | 0.624 | 1.02 / 1.11 |
+| 30 | 0.750 | 0.715 | 0.737 | 1.03 / 1.16 |
 
 (The offline `hash` embedder exists only so the harness can run anywhere; its
 numbers say nothing about Threadline's actual quality.)
@@ -184,10 +183,12 @@ corrections, hold some out, and compare.
 ```
 background.js        MV3 service worker: tab lifecycle, serialised storage writes, messages
 content_script.js    Page text extraction + dwell tracking (shipped as-is, no imports)
-src/ml/              embedder, graph (chain), clusterer, labeler, personalise, feedback,
+src/ml/              categories, embedder, graph (chain), personalise, feedback,
                      implicitFeedback, recency, pipeline
+src/offscreen/       Hidden page that classifies tabs for the service worker
+blocked.html/.js     The page strict focus shows
 public/model/        The language model, bundled (see THIRD_PARTY_NOTICES.md)
-training/            Scripts to fine-tune and convert the language model
+training/            Scripts to fine-tune the language model and train a category network
 src/popup/           React popup UI
 tests/               Plain-Node tests (+ chrome.* mock in tests/helpers)
 eval/                labelled tabs + chain-quality benchmark
@@ -200,15 +201,19 @@ See [CODE_GUIDE.md](CODE_GUIDE.md) for a guided tour of the code and
 
 - Personalisation is off by default and hasn't been shown to help (see
   Evaluation).
-- A broad single topic is usually split into two groups, and tabs can end up alone
-  in a group (the 9-tab demo gives Shinkansen its own colour). The chain order isn't
-  affected.
-- The single-topic rule is one fixed similarity cut-off, tied to this model's scale.
-- A sort takes about 2 seconds in a new popup and about 1 second again in the same
-  popup, because WebAssembly runs on one thread in an extension popup.
+- Focus mode has no screen yet, only service worker console commands.
+- **Categories will sometimes be wrong**, especially for sites that aren't on the known
+  list, and there's no way yet to correct one and have it remembered.
+- Short searches give the model little to go on: "what is photosynthesis" lands in
+  Social.
+- YouTube channel names come from the page's layout, so a redesign could stop that
+  working. Video titles would still be used.
+- Tab groups can't be nested in Chrome, so subcategories only show as the order inside
+  a group, in the popup, and in the badge's tooltip.
+- **Sort now** takes a few seconds, because WebAssembly runs on one thread in an
+  extension popup. Sites on the known list sort instantly.
 - The extension is about 45 MB once built, because of the model and its runtime.
-- Chrome keeps pinned tabs first, so Apply Order sorts them among themselves at
-  the front. `chrome://` tabs aren't sorted and end up after the sorted tabs.
+- Pinned tabs and `chrome://` tabs aren't sorted.
 - No Chrome Web Store listing yet.
 
 ## License

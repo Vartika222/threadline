@@ -51,6 +51,9 @@ export default defineConfig(({ mode }) => ({
         // Popup: standard HTML entry — Vite handles React/CSS bundling
         popup: resolve(__dirname, 'popup.html'),
 
+        // Hidden page that classifies tabs for the service worker
+        offscreen: resolve(__dirname, 'offscreen.html'),
+
         // Background service worker: compiled to dist/background.js
         // Must be a flat file — no dynamic chunk splitting
         background: resolve(__dirname, 'background.js'),

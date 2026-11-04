@@ -8,6 +8,8 @@ threadline/
 ├── background.js          Service worker — tab lifecycle, serialised storage writes, messages
 ├── content_script.js      Injected into every tab — extracts content + dwell time
 ├── popup.html             Popup entry point
+├── offscreen.html         Hidden page that runs the model for the service worker
+├── blocked.html/.js       The page strict focus shows
 ├── vite.config.js         Build config
 │
 ├── src/
@@ -15,8 +17,7 @@ threadline/
 │   └── ml/
 │       ├── embedder.js          all-MiniLM-L6-v2 (Transformers.js) + cosine similarity
 │       ├── graph.js             Similarity matrix + chain (MST, greedy, local search)
-│       ├── clusterer.js         Agglomerative topic clustering
-│       ├── labeler.js           TF-IDF names for each cluster
+│       ├── categories.js        8 categories, known sites, YouTube and search rules
 │       ├── personalise.js       Optional learned weighting, training data, retrain rule
 │       ├── feedback.js          Drag reorders → training pairs
 │       ├── implicitFeedback.js  Tab-switch bursts → training pairs (+ weak negatives)
@@ -37,6 +38,8 @@ threadline/
 - **All read-modify-write of `chrome.storage` in `background.js` goes through
   `updateTabStore` / `withStoreLock`.** Never load the store, await something,
   then save it — that's how updates get lost.
+- **`KNOWN_GROUP_TITLES` in `background.js` must match `CATEGORIES` in
+  `src/ml/categories.js`**, because `background.js` can't import. A test checks this.
 - **Anything random in the ML path must use a seeded generator**, so the same
   tabs always give the same result (see `tests/determinism.test.js`).
 
@@ -49,6 +52,7 @@ npm run build        # builds popup via Vite + copies extension files to dist/
 npm run build:verify # build + check dist/ is complete (what CI runs)
 npm run eval         # chain-quality benchmark with the offline embedder
 npm run eval:model   # same, with the real language model
+npm run eval:categories  # category accuracy with the real language model
 ```
 
 ## Running a single test file

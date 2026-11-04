@@ -50,10 +50,16 @@ export default function App() {
   const [exampleCount, setExampleCount] = useState(0);
   const [personalising, setPersonalising] = useState(false);
   const [sortMethod, setSortMethod] = useState('cosine');
+  const [autoSort, setAutoSort] = useState(true);
+  const [canUndo, setCanUndo] = useState(false);
 
   useEffect(() => {
     loadTrainingExamples().then(examples => setExampleCount(examples.length));
     isPersonalisationEnabled().then(setPersonalising);
+    chrome.runtime.sendMessage({ type: 'GET_SORT_STATE' }).then(state => {
+      setAutoSort(state.autoSort);
+      setCanUndo(state.canUndo);
+    });
   }, []);
 
   // Load tabs on mount
@@ -84,6 +90,7 @@ export default function App() {
       setSimMatrix(result.simMatrix);
       setSortMethod(result.method);
       setView('sorted');
+      await applyToTabStrip(result.chain);
 
       // The pipeline may have just drained the implicit tab-switch-burst
       // queue (see implicitFeedback.js) and stored new training examples
@@ -98,15 +105,28 @@ export default function App() {
     }
   }
 
-  async function handleApply() {
-    const orderedTabIds = sortedChain.map(t => t.tabId);
-    const response = await chrome.runtime.sendMessage({ type: 'APPLY_ORDER', orderedTabIds });
+  /** Moves the real tabs to match the chain, in named groups. */
+  async function applyToTabStrip(chain) {
+    const entries = chain.filter(tab => tab.placement).map(tab => ({ tabId: tab.tabId, placement: tab.placement }));
+    const response = await chrome.runtime.sendMessage({ type: 'APPLY_SORT', entries });
     if (response?.error) {
       setError(`Could not reorder the tabs: ${response.error}`);
       setView('idle');
       return;
     }
-    window.close(); // Close the popup after applying
+    setCanUndo(true);
+  }
+
+  async function handleUndo() {
+    await chrome.runtime.sendMessage({ type: 'UNDO_SORT' });
+    setCanUndo(false);
+    setView('idle');
+    loadTabs();
+  }
+
+  async function handleToggleAutoSort(event) {
+    setAutoSort(event.target.checked);
+    await chrome.runtime.sendMessage({ type: 'SET_AUTO_SORT', enabled: event.target.checked });
   }
 
   /**
@@ -118,6 +138,7 @@ export default function App() {
     const newChain = reannotateChain(reordered, simMatrix);
     const pairs = deriveTrainingPairs(sortedChain, newChain, movedTabId);
     setSortedChain(newChain); // update the UI immediately, don't block on storage
+    await applyToTabStrip(newChain);
 
     if (pairs.length === 0) return;
 
@@ -186,6 +207,11 @@ export default function App() {
               {tabs.length} tabs open
             </div>
             <SortButton onClick={handleSort} />
+            <label className="auto-sort-toggle">
+              <input type="checkbox" checked={autoSort} onChange={handleToggleAutoSort} />
+              Sort tabs automatically
+            </label>
+            {canUndo && <button className="cancel-btn" onClick={handleUndo}>Undo last sort</button>}
             {error && <div className="error">{error}</div>}
             <div className="tab-list">
               {tabs.map(tab => {
@@ -232,11 +258,11 @@ export default function App() {
             </label>
             {personalising && <LearningStatus exampleCount={exampleCount} sortMethod={sortMethod} />}
             <div className="action-row">
-              <button className="apply-btn" onClick={handleApply}>
-                Apply Order
+              <button className="apply-btn" onClick={() => setView('idle')}>
+                Done
               </button>
-              <button className="cancel-btn" onClick={() => setView('idle')}>
-                Cancel
+              <button className="cancel-btn" onClick={handleUndo}>
+                Undo
               </button>
             </div>
           </div>

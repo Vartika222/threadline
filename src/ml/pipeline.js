@@ -1,11 +1,11 @@
 /**
  * THREADLINE — pipeline.js
  *
- * Orchestrates the full ML sort in 4 steps:
+ * Orchestrates a full sort in 4 steps:
  *   1. Embed       → one vector per tab (all-MiniLM-L6-v2)
  *   2. Similarity  → N×N cosine similarity matrix
- *   3. Chain       → best of MST + DFS and greedy, polished by local search
- *   4. Cluster     → agglomerative topic groups
+ *   3. Categorise  → a category and subcategory for each tab
+ *   4. Chain       → within each subcategory, the most related order
  *
  * @param {Array}    tabs       - Tab objects from background.js
  * @param {Function} onProgress - UI progress string callback
@@ -13,9 +13,8 @@
  */
 
 import { embedTexts, cosineSimilarity }                           from './embedder.js';
-import { buildSimilarityMatrix, buildChainOrder, annotateChain } from './graph.js';
-import { clusterTabs }                                             from './clusterer.js';
-import { labelClusters }                                           from './labeler.js';
+import { buildSimilarityMatrix, buildChainOrder } from './graph.js';
+import { classifyTabs, placementFor, CATEGORY_NAMES }               from './categories.js';
 import { consumeImplicitPairs }                                    from './implicitFeedback.js';
 import { isPersonalisationEnabled, loadAdjustments, scoreAllPairs } from './personalise.js';
 
@@ -39,9 +38,7 @@ export async function runMLPipeline(inputTabs, onProgress = () => {}) {
 
   if (tabs.length === 1) {
     return {
-      chain:    [{ ...tabs[0], chainPosition: 0, similarityToNext: null }],
-      clusters: { [tabs[0].tabId]: 0 },
-      clusterLabels: { 0: 'All Tabs' },
+      ...(await categoriseAlone(tabs)),
       simMatrix: [[1]],
       method:   'trivial',
       implicitExampleCount: 0,
@@ -82,32 +79,61 @@ export async function runMLPipeline(inputTabs, onProgress = () => {}) {
     }
   }
 
-  // ── STEP 3: CHAIN ─────────────────────────────────────────────────────
-  // The strongest linear order we can find. See buildChainOrder in graph.js.
+  // ── STEP 3: CATEGORISE ────────────────────────────────────────────────
+  onProgress('Sorting into categories...');
+  const placements = (await classifyTabs(tabs, embedTexts)).map(placementFor);
+
+  // ── STEP 4: CHAIN ─────────────────────────────────────────────────────
+  // Categories in their fixed order, then subcategories, and within each
+  // subcategory the strongest chain of related tabs (see graph.js).
   onProgress('Finding your thread...');
-  const orderedIndices = buildChainOrder(simMatrix);
-  const annotated      = annotateChain(orderedIndices, simMatrix);
+  const orderedIndices = orderWithinCategories(placements, simMatrix);
 
-  const chain = annotated.map(({ index, similarityToNext }, chainPos) => ({
-    ...tabs[index],
-    chainPosition:    chainPos,
-    originalIndex:    index,
-    similarityToNext,
-  }));
-
-  // ── STEP 4: CLUSTER ───────────────────────────────────────────────────
-  // Agglomerative clustering gives each tab a topic label for colour-coding.
-  onProgress('Identifying topics...');
-  const clusterAssignments = clusterTabs(embeddings);
+  const chain = orderedIndices.map((index, position) => {
+    const next = orderedIndices[position + 1];
+    const sameCategory = next !== undefined && placements[next].category === placements[index].category;
+    return {
+      ...tabs[index],
+      placement:        placements[index],
+      chainPosition:    position,
+      originalIndex:    index,
+      // A percentage between unrelated categories means nothing, so don't show one.
+      similarityToNext: sameCategory ? simMatrix[index][next] : null,
+    };
+  });
 
   const clusters = {};
-  tabs.forEach((tab, i) => { clusters[tab.tabId] = clusterAssignments[i]; });
-
-  // ── STEP 5: LABEL CLUSTERS ─────────────────────────────────────────────
-  // TF-IDF over each cluster's tab content picks 1-2 distinguishing words,
-  // so the UI can show "React Hooks" / "Trip Planning" instead of just
-  // colour dots. See labeler.js for why cluster-level (not tab-level) TF-IDF.
-  const clusterLabels = labelClusters(tabs, clusterAssignments);
+  const clusterLabels = {};
+  tabs.forEach((tab, i) => {
+    clusters[tab.tabId] = placements[i].categoryRank;
+    clusterLabels[placements[i].categoryRank] = placements[i].category;
+  });
 
   return { chain, clusters, clusterLabels, simMatrix, method, implicitExampleCount: implicitCount };
+}
+
+/** A one-tab sort has nothing to chain, but still needs its category. */
+async function categoriseAlone(tabs) {
+  const [placement] = (await classifyTabs(tabs, embedTexts)).map(placementFor);
+  tabs[0].placement = placement;
+  return {
+    chain: [{ ...tabs[0], chainPosition: 0, similarityToNext: null }],
+    clusters: { [tabs[0].tabId]: placement.categoryRank },
+    clusterLabels: { [placement.categoryRank]: CATEGORY_NAMES[placement.categoryRank] },
+  };
+}
+
+/** Tab indices ordered by category, then subcategory, then related neighbours. */
+function orderWithinCategories(placements, simMatrix) {
+  const buckets = new Map();
+  placements.forEach((p, i) => {
+    const key = p.categoryRank * 100 + p.subcategoryRank;
+    if (!buckets.has(key)) buckets.set(key, []);
+    buckets.get(key).push(i);
+  });
+  return [...buckets.keys()].sort((a, b) => a - b).flatMap(key => {
+    const members = buckets.get(key);
+    const subMatrix = members.map(a => members.map(b => simMatrix[a][b]));
+    return buildChainOrder(subMatrix).map(position => members[position]);
+  });
 }
