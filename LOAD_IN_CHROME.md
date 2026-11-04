@@ -77,9 +77,9 @@ Open at least 8-10 tabs with clearly different topics — for example:
 
 Then:
 1. Open the popup
-2. Click **Sort by relatability**
+2. Click **Sort now**
 3. Watch the progress messages in the popup
-4. After about 2 seconds, the sorted chain should appear
+4. After a few seconds, the sorted chain should appear and your tabs should move into named groups, with no Apply step
 5. Check that the React tabs are adjacent to each other and the food tabs are adjacent to each other
 
 If the sort produces a visually random order, check the popup's DevTools console — the embeddings may have failed to load and the pipeline may have thrown an error silently.

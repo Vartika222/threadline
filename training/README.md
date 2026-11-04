@@ -1,4 +1,6 @@
-# Fine-tuning the language model
+# Training
+
+## Fine-tuning the language model
 
 Threadline ships `all-MiniLM-L6-v2`, a pretrained sentence-embedding network, unchanged.
 These scripts fine-tune it and convert the result into the files the extension
@@ -54,3 +56,24 @@ Both got much better at the task they trained on and worse at tabs. DBPedia's
 categories are things like "Manga" and "Governor", so the model learns entity types,
 which is not how people group tabs. Better training data is the next thing to try:
 labelled browsing sessions, or text pairs from pages people actually read together.
+
+## The category network
+
+`train_categories.py` trains a small network on top of the language model, using
+`dmoz.csv` (1.2M website titles and descriptions, available as a Kaggle download):
+
+```bash
+.venv-train/bin/python training/train_categories.py ~/Downloads/archive-2/dmoz.csv training/output/category_network.json
+```
+
+It takes a few minutes, and reached 84% on held-out `dmoz.csv` text. **It isn't used**,
+because on real sites it lost clearly:
+
+| Method | Held-out real sites (40) |
+| --- | ---: |
+| Written category descriptions | **90%** |
+| Descriptions, with a little of the network blended in | 90% |
+| Trained network | 63% |
+
+dmoz has no labels for social media or streaming, so the network scored 0 of 4 on
+each. A dataset with those labels would be the thing to try next.

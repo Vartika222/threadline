@@ -99,8 +99,16 @@ function extractContent() {
     .filter(Boolean)
     .join('. ');
 
+  // On YouTube, the channel says more about a video than its title does.
+  const channel = window.location.hostname.endsWith('youtube.com')
+    ? (document.querySelector('ytd-watch-metadata ytd-channel-name a, #owner ytd-channel-name a')?.textContent
+      || document.querySelector('span[itemprop="author"] link[itemprop="name"]')?.getAttribute('content')
+      || '').trim()
+    : '';
+
   return {
     title,
+    channel,
     url: window.location.href,
     domain: window.location.hostname,
     description: metaDesc,
@@ -146,4 +154,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 // Send initial data when script loads
 setTimeout(notifyBackground, 1000); // Wait 1s for page to settle
+
+// YouTube changes video without loading a new page, so this script doesn't rerun.
+document.addEventListener('yt-navigate-finish', () => setTimeout(notifyBackground, 1000));
 })();

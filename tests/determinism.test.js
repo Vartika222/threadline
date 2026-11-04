@@ -1,9 +1,9 @@
 /**
- * tests/determinism.test.js — the same tabs must always get the same clusters.
- * (Before the fix, k-means used Math.random, so labels could differ per run.)
+ * tests/determinism.test.js — the same tabs must always give the same result.
  * Run with: node tests/determinism.test.js
  */
-import { clusterTabs } from '../src/ml/clusterer.js';
+import { cosineSimilarity } from '../src/ml/embedder.js';
+import { buildSimilarityMatrix, buildChainOrder } from '../src/ml/graph.js';
 import { hashEmbed } from '../eval/embedders.js';
 import { mulberry32, shuffled } from '../eval/metrics.js';
 import { canonicalTabOrder } from '../src/ml/pipeline.js';
@@ -19,17 +19,13 @@ const texts = [
 ];
 const embeddings = texts.map(hashEmbed);
 
-test('clusterTabs gives identical assignments on 25 repeated runs', () => {
-  const first = clusterTabs(embeddings).join();
-  for (let i = 0; i < 25; i++) {
-    assert(clusterTabs(embeddings).join() === first, `run ${i} differed from the first run`);
-  }
-});
+const chainOf = (vectors) => buildChainOrder(buildSimilarityMatrix(vectors, cosineSimilarity));
 
-test('clusterTabs output is one non-negative integer per tab', () => {
-  const out = clusterTabs(embeddings);
-  assert(out.length === texts.length, 'one label per tab');
-  assert(out.every(c => Number.isInteger(c) && c >= 0), 'labels are non-negative integers');
+test('the chain is identical on 25 repeated runs', () => {
+  const first = chainOf(embeddings).join();
+  for (let i = 0; i < 25; i++) {
+    assert(chainOf(embeddings).join() === first, `run ${i} differed from the first run`);
+  }
 });
 
 test('canonicalTabOrder gives one order whatever order the tabs arrive in', () => {
@@ -50,19 +46,16 @@ test('canonicalTabOrder falls back to the URL when text matches, and leaves its 
   assert(input[0] === b, 'input array is not reordered');
 });
 
-test('same tabs in any order give the same clusters once put in canonical order', () => {
+test('same tabs in any order give the same chain once put in canonical order', () => {
   const tabs = texts.map((content, i) => ({ tabId: i, content, embedding: embeddings[i] }));
-  const clustersByTab = (list) => {
+  const chainByTab = (list) => {
     const ordered = canonicalTabOrder(list);
-    const assignments = clusterTabs(ordered.map(t => t.embedding));
-    const byTab = {};
-    ordered.forEach((t, i) => { byTab[t.tabId] = assignments[i]; });
-    return JSON.stringify(byTab);
+    return chainOf(ordered.map(t => t.embedding)).map(i => ordered[i].tabId).join();
   };
-  const baseline = clustersByTab(tabs);
+  const baseline = chainByTab(tabs);
   const rand = mulberry32(5);
   for (let run = 0; run < 10; run++) {
-    assert(clustersByTab(shuffled(tabs, rand)) === baseline, `run ${run} grouped the tabs differently`);
+    assert(chainByTab(shuffled(tabs, rand)) === baseline, `run ${run} gave a different chain`);
   }
 });
 

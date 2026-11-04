@@ -10,9 +10,6 @@
  *   greedy-nn  greedy "go to the most similar unvisited tab" chain
  *   random     a random order (the floor)
  *
- * It also scores Threadline's topic clustering (agglomerative) against the
- * ground-truth topics with the Adjusted Rand Index.
- *
  * Usage:
  *   npm run eval                       # offline lexical stand-in (checks the harness)
  *   npm run eval:model                 # real model (all-MiniLM-L6-v2, bundled)
@@ -29,11 +26,10 @@ import { fileURLToPath } from 'node:url';
 
 import { cosineSimilarity } from '../src/ml/embedder.js';
 import { buildSimilarityMatrix, buildMST, traverseMST, buildChainOrder } from '../src/ml/graph.js';
-import { clusterTabs } from '../src/ml/clusterer.js';
 import { getEmbedder } from './embedders.js';
 import {
   mulberry32, shuffled, adjacentSameGroupRate, runsPerGroup,
-  adjustedRandIndex, mean, stdErr,
+  mean, stdErr,
 } from './metrics.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -95,7 +91,6 @@ export async function runEvaluation({ embedder: embedderName, trials, sizes, see
       'greedy-nn': { adj: [], runs: [] },
       'random':    { adj: [], runs: [] },
     };
-    const ari = [];
 
     for (let t = 0; t < trials; t++) {
       const subset = shuffled(tabs.map((_, i) => i), rand).slice(0, size);
@@ -114,10 +109,9 @@ export async function runEvaluation({ embedder: embedderName, trials, sizes, see
         scores[name].runs.push(runsPerGroup(order, subGroups));
       }
 
-      ari.push(adjustedRandIndex(clusterTabs(subEmb), subGroups));
     }
 
-    rows.push({ size, scores, ari });
+    rows.push({ size, scores });
   }
   return { embedderName, trials, rows };
 }
@@ -137,7 +131,6 @@ export function renderMarkdown({ embedderName, trials, rows }) {
   lines.push('');
   lines.push('**Neighbour agreement** = share of adjacent tabs in the chain from the same topic (higher is better).');
   lines.push('**Runs per topic** = contiguous stretches per topic (1.0 is ideal; lower is better).');
-  lines.push('**Clustering ARI** = agreement of the topic groups with true topics (1 = perfect, 0 = chance).');
   lines.push('');
   lines.push('| Tabs | Ordering | Neighbour agreement ↑ | Runs per topic ↓ |');
   lines.push('| ---: | --- | ---: | ---: |');
@@ -146,10 +139,6 @@ export function renderMarkdown({ embedderName, trials, rows }) {
       lines.push(`| ${size} | ${name} | ${fmt(scores[name].adj)} | ${fmt(scores[name].runs)} |`);
     }
   }
-  lines.push('');
-  lines.push('| Tabs | Clustering ARI ↑ |');
-  lines.push('| ---: | ---: |');
-  for (const { size, ari } of rows) lines.push(`| ${size} | ${fmt(ari)} |`);
   lines.push('');
   return lines.join('\n');
 }

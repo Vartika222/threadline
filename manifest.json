@@ -6,7 +6,10 @@
   "permissions": [
     "tabs",
     "storage",
-    "scripting"
+    "scripting",
+    "tabGroups",
+    "alarms",
+    "offscreen"
   ],
   "host_permissions": [
     "<all_urls>"

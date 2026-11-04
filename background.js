@@ -20,6 +20,12 @@
  *   APPLY_ORDER       → from popup, moves tabs into the sorted order
  *   SAVE_SNAPSHOT     → from popup, saves current tab state
  *   GET_SNAPSHOTS     → from popup, lists saved states
+ *   APPLY_SORT        → from popup, puts tabs in order and into named groups
+ *   UNDO_SORT         → from popup, restores the tabs from before the last sort
+ *   GET_SORT_STATE    → from popup, auto-sort setting and what Undo can do
+ *   SET_AUTO_SORT     → from popup, turns automatic sorting on or off
+ *   START_FOCUS, END_FOCUS, GET_FOCUS, SET_STRICT_FOCUS, FOCUS_ALLOW, FOCUS_GO_BACK
+ *                     → focus mode (see below)
  */
 
 // ─── State Management ─────────────────────────────────────────────────────
@@ -245,10 +251,12 @@ async function injectContentScriptIntoOpenTabs() {
 chrome.runtime.onInstalled?.addListener(async () => {
   await syncStoreWithOpenTabs();
   await injectContentScriptIntoOpenTabs();
+  scheduleAutoSort();
 });
 
 chrome.runtime.onStartup?.addListener(async () => {
   await syncStoreWithOpenTabs();
+  scheduleAutoSort();
 });
 
 // When a new tab is created, register it in our store
@@ -263,6 +271,7 @@ chrome.tabs.onRemoved.addListener(async (tabId) => {
   await updateTabStore((store) => {
     delete store[tabId];
   });
+  await forgetPlacement(tabId);
 });
 
 // When a tab is activated (user switches to it), increment revisit count
@@ -310,6 +319,9 @@ chrome.tabs.onActivated.addListener(async ({ tabId }) => {
       store[tabId] = { ...store[tabId], ...freshData };
     }
   });
+
+  await showTabCategoryOnBadge(tabId);
+  await enforceFocus(tabId);
 });
 
 /**
@@ -328,6 +340,7 @@ function forgetPageTextOnNavigation(tabId, newUrl) {
     entry.domain = safeHostname(newUrl);
     entry.content = '';
     entry.description = '';
+    entry.channel = '';
   });
 }
 
@@ -355,7 +368,429 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
       lastUpdated: Date.now(),
     };
   });
+  scheduleAutoSort();
 });
+
+// ─── Automatic Sorting ────────────────────────────────────────────────────
+//
+// When a tab finishes loading, it moves into a named tab group for its category.
+// Only tabs on a new URL are touched, so everything else stays put, and if you
+// move a tab by hand it stays there until it navigates somewhere new. Groups
+// you made yourself are never changed.
+
+const AUTO_SORT_KEY = 'auto_sort_enabled';
+const PLACEMENTS_KEY = 'tab_placements';   // tabId → { url, category, subcategory, ... }
+const UNDO_KEY = 'undo_state';
+const AUTO_SORT_DELAY_MS = 1500;           // lets the page text arrive, and groups bursts of tabs
+const TAB_EDIT_RETRIES = 6;
+const TAB_EDIT_RETRY_MS = 400;
+
+let autoSortTimer = null;
+let autoSortRunning = false;
+let autoSortAgain = false;
+
+function scheduleAutoSort() {
+  clearTimeout(autoSortTimer);
+  autoSortTimer = setTimeout(runAutoSort, AUTO_SORT_DELAY_MS);
+  autoSortTimer.unref?.(); // tests under Node shouldn't wait for this
+}
+
+async function isAutoSortOn() {
+  const { [AUTO_SORT_KEY]: enabled } = await chrome.storage.local.get(AUTO_SORT_KEY);
+  return enabled !== false;
+}
+
+async function loadPlacements() {
+  const { [PLACEMENTS_KEY]: placements } = await chrome.storage.session.get(PLACEMENTS_KEY);
+  return placements || {};
+}
+
+function savePlacements(placements) {
+  return chrome.storage.session.set({ [PLACEMENTS_KEY]: placements });
+}
+
+function forgetPlacement(tabId) {
+  return withStoreLock(async () => {
+    const placements = await loadPlacements();
+    delete placements[tabId];
+    await savePlacements(placements);
+  });
+}
+
+const isSortable = (tab) => /^https?:/.test(tab.url || '') && !tab.pinned;
+
+/** Chrome refuses tab changes while the user is dragging a tab, so try again. */
+async function editTabs(action) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await action();
+    } catch (err) {
+      const busy = /cannot be edited|dragging/i.test(err.message);
+      if (!busy || attempt >= TAB_EDIT_RETRIES) throw err;
+      await new Promise(resolve => setTimeout(resolve, TAB_EDIT_RETRY_MS));
+    }
+  }
+}
+
+/** Starts the hidden page that runs the model, if it isn't already running. */
+async function ensureClassifierPage() {
+  if (await chrome.offscreen.hasDocument()) return;
+  await chrome.offscreen.createDocument({
+    url: 'offscreen.html',
+    reasons: ['WORKERS'],
+    justification: 'Runs the on-device language model that classifies tabs.',
+  });
+}
+
+async function classifyInBackground(tabs) {
+  const store = await loadTabStore();
+  await ensureClassifierPage();
+  const response = await chrome.runtime.sendMessage({
+    type: 'CLASSIFY_TABS',
+    tabs: tabs.map(tab => {
+      const saved = store[tab.id] || {};
+      return {
+        url: tab.url,
+        title: tab.title,
+        description: saved.description || '',
+        content: saved.content || '',
+        channel: saved.channel || '',
+      };
+    }),
+  });
+  if (response?.error) throw new Error(response.error);
+  return response;
+}
+
+async function runAutoSort() {
+  if (autoSortRunning) {
+    autoSortAgain = true;
+    return;
+  }
+  autoSortRunning = true;
+  try {
+    if (!(await isAutoSortOn())) return;
+
+    const placements = await loadPlacements();
+    const store = await loadTabStore();
+    // A page can stay "loading" for a long time on ads and video. Once its text
+    // has arrived, there's enough to sort it.
+    const isReady = (tab) => tab.status !== 'loading'
+      || (store[tab.id]?.content && withoutHash(store[tab.id].url) === withoutHash(tab.url));
+    const tabs = (await chrome.tabs.query({})).filter(tab =>
+      isSortable(tab) && isReady(tab) && placements[tab.id]?.url !== withoutHash(tab.url));
+    if (tabs.length === 0) return;
+
+    const { placements: results, categoryNames } = await classifyInBackground(tabs);
+    const managed = new Set(categoryNames);
+
+    await saveUndoState(tabs.map(tab => tab.windowId));
+    for (let i = 0; i < tabs.length; i++) {
+      placements[tabs[i].id] = { url: withoutHash(tabs[i].url), ...results[i] };
+      await placeTabInGroup(tabs[i], results[i], managed, placements);
+    }
+    await savePlacements(placements);
+
+    const [active] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+    if (active) {
+      await showTabCategoryOnBadge(active.id);
+      await enforceFocus(active.id);
+    }
+  } catch (err) {
+    console.warn('[Threadline] Automatic sort failed:', err.message);
+  } finally {
+    autoSortRunning = false;
+    if (autoSortAgain) {
+      autoSortAgain = false;
+      scheduleAutoSort();
+    }
+  }
+}
+
+/** The group in this window for a category, if there is one. */
+async function findCategoryGroup(windowId, category) {
+  const groups = await chrome.tabGroups.query({ windowId });
+  return groups.find(group => group.title === category) || null;
+}
+
+async function moveTabIntoCategoryGroup(tabId, windowId, placement) {
+  const existing = await findCategoryGroup(windowId, placement.category);
+  if (existing) {
+    await editTabs(() => chrome.tabs.group({ groupId: existing.id, tabIds: [tabId] }));
+    return existing.id;
+  }
+  const groupId = await editTabs(() => chrome.tabs.group({ tabIds: [tabId], createProperties: { windowId } }));
+  await editTabs(() => chrome.tabGroups.update(groupId, { title: placement.category, color: placement.color }));
+  return groupId;
+}
+
+/** Puts a tab in its group, keeping the group's tabs in subcategory order. */
+async function placeTabInGroup(tab, placement, managed, placements) {
+  if (tab.groupId !== undefined && tab.groupId !== -1) {
+    const current = await chrome.tabGroups.get(tab.groupId);
+    if (!managed.has(current.title)) return; // a group the user made
+    if (current.title === placement.category) return;
+  }
+  const groupId = await moveTabIntoCategoryGroup(tab.id, tab.windowId, placement);
+
+  const members = (await chrome.tabs.query({ groupId })).sort((a, b) => a.index - b.index);
+  const others = members.filter(member => member.id !== tab.id);
+  const following = others.find(member =>
+    (placements[member.id]?.subcategoryRank ?? Infinity) > placement.subcategoryRank);
+  const self = members.find(member => member.id === tab.id);
+  if (!following || !self) return;
+  const target = following.index < self.index ? following.index : following.index - 1;
+  if (target !== self.index) await editTabs(() => chrome.tabs.move(tab.id, { index: target }));
+}
+
+/** Puts a popup sort into the tab strip: chain order, inside named groups. */
+async function applySort(entries) {
+  const windowTabs = await chrome.tabs.query({ currentWindow: true });
+  const byId = new Map(windowTabs.map(tab => [tab.id, tab]));
+  const groups = await chrome.tabGroups.query({ windowId: windowTabs[0]?.windowId });
+  const titles = new Map(groups.map(group => [group.id, group.title]));
+  const managed = new Set(entries.map(entry => entry.placement.category));
+  const isUserGrouped = (tab) => tab.groupId !== undefined && tab.groupId !== -1 && !isManagedTitle(titles.get(tab.groupId), managed);
+
+  const live = entries.filter(({ tabId }) => {
+    const tab = byId.get(tabId);
+    return tab && !tab.pinned && !isUserGrouped(tab);
+  });
+  await saveUndoState([windowTabs[0]?.windowId]);
+
+  // Empty the old groups first: moving a tab across a group would pull it in.
+  const managedTabs = live.map(entry => entry.tabId).filter(id => {
+    const groupId = byId.get(id).groupId;
+    return groupId !== undefined && groupId !== -1;
+  });
+  if (managedTabs.length) await editTabs(() => chrome.tabs.ungroup(managedTabs));
+
+  const result = await applyTabOrder(live.map(entry => entry.tabId));
+
+  const placements = await loadPlacements();
+  const tabsAfter = await chrome.tabs.query({ currentWindow: true });
+  const stillOpen = new Set(tabsAfter.map(tab => tab.id));
+  const byCategory = new Map();
+  for (const { tabId, placement } of live) {
+    if (!stillOpen.has(tabId)) continue;
+    if (!byCategory.has(placement.category)) byCategory.set(placement.category, { placement, tabIds: [] });
+    byCategory.get(placement.category).tabIds.push(tabId);
+    placements[tabId] = { url: withoutHash(byId.get(tabId).url), ...placement };
+  }
+  for (const { placement, tabIds } of byCategory.values()) {
+    const groupId = await editTabs(() => chrome.tabs.group({ tabIds, createProperties: { windowId: tabsAfter[0].windowId } }));
+    await editTabs(() => chrome.tabGroups.update(groupId, { title: placement.category, color: placement.color }));
+  }
+  await savePlacements(placements);
+
+  const active = tabsAfter.find(tab => tab.active);
+  if (active) await showTabCategoryOnBadge(active.id);
+  return result;
+}
+
+// Every category a sort could produce isn't in `entries`, so a group from an
+// earlier sort counts as ours if the placements recorded it.
+function isManagedTitle(title, managed) {
+  return managed.has(title) || KNOWN_GROUP_TITLES.has(title);
+}
+const KNOWN_GROUP_TITLES = new Set(['Study', 'Work', 'Entertainment', 'Games', 'Social', 'Shopping & Art', 'News', 'Life & Other']);
+
+/** Records how the tabs are arranged, so Undo can put them back. */
+async function saveUndoState(windowIds) {
+  const state = [];
+  for (const windowId of new Set(windowIds)) {
+    if (windowId === undefined) continue;
+    const tabs = await chrome.tabs.query({ windowId });
+    const groups = await chrome.tabGroups.query({ windowId });
+    state.push({
+      windowId,
+      tabs: tabs.sort((a, b) => a.index - b.index).map(tab => ({ id: tab.id, index: tab.index, groupId: tab.groupId ?? -1, pinned: !!tab.pinned })),
+      groups: groups.map(group => ({ id: group.id, title: group.title, color: group.color, collapsed: group.collapsed })),
+    });
+  }
+  await chrome.storage.session.set({ [UNDO_KEY]: { windows: state, placements: await loadPlacements() } });
+}
+
+async function undoLastSort() {
+  const { [UNDO_KEY]: state } = await chrome.storage.session.get(UNDO_KEY);
+  if (!state) return { ok: false };
+
+  // Put categories back too. Tabs sorted for the first time keep their entry, so
+  // automatic sorting doesn't immediately redo what was just undone.
+  await savePlacements({ ...(await loadPlacements()), ...state.placements });
+
+  for (const { windowId, tabs, groups } of state.windows) {
+    const open = new Map((await chrome.tabs.query({ windowId })).map(tab => [tab.id, tab]));
+    const grouped = [...open.values()].filter(tab => tab.groupId !== undefined && tab.groupId !== -1).map(tab => tab.id);
+    if (grouped.length) await editTabs(() => chrome.tabs.ungroup(grouped));
+
+    for (const { id, index } of tabs) {
+      if (open.has(id)) await editTabs(() => chrome.tabs.move(id, { index })).catch(() => {});
+    }
+    for (const group of groups) {
+      const tabIds = tabs.filter(tab => tab.groupId === group.id && open.has(tab.id)).map(tab => tab.id);
+      if (tabIds.length === 0) continue;
+      const groupId = await editTabs(() => chrome.tabs.group({ tabIds, createProperties: { windowId } }));
+      await editTabs(() => chrome.tabGroups.update(groupId, { title: group.title, color: group.color, collapsed: group.collapsed }));
+    }
+  }
+  await chrome.storage.session.remove(UNDO_KEY);
+  return { ok: true };
+}
+
+/** Shows the tab's category on the toolbar icon. Focus mode's timer takes priority. */
+async function showTabCategoryOnBadge(tabId) {
+  if (await loadFocus()) return;
+  const placement = (await loadPlacements())[tabId];
+  if (!placement) {
+    await chrome.action.setBadgeText({ tabId, text: '' });
+    return;
+  }
+  await chrome.action.setBadgeText({ tabId, text: placement.category.slice(0, 2).toUpperCase() });
+  await chrome.action.setTitle({ tabId, title: `Threadline: ${placement.category} › ${placement.subcategory}` });
+}
+
+// ─── Focus Mode ───────────────────────────────────────────────────────────
+//
+// Pick a category and a duration, and the other groups collapse until the timer
+// ends. Opening a tab from another category shows "!" on the badge, or with strict
+// focus enabled, sends it to a "Back to Study" page. Tabs marked Unsure are never
+// blocked, and the blocked page can always allow the site or end focus, because
+// the classifier will sometimes be wrong.
+//
+// No screen controls this yet. In the service worker console:
+//   threadline.startFocus('Study', 50)   threadline.endFocus()
+//   threadline.setStrictFocus(true)
+
+const FOCUS_KEY = 'focus_state';
+const STRICT_FOCUS_KEY = 'strict_focus_enabled';
+const FOCUS_END_ALARM = 'focus-end';
+const FOCUS_TICK_ALARM = 'focus-tick';
+
+async function loadFocus() {
+  const { [FOCUS_KEY]: focus } = await chrome.storage.local.get(FOCUS_KEY);
+  return focus && focus.endsAt > Date.now() ? focus : null;
+}
+
+async function isStrictFocusOn() {
+  const { [STRICT_FOCUS_KEY]: enabled } = await chrome.storage.local.get(STRICT_FOCUS_KEY);
+  return enabled === true;
+}
+
+async function showFocusBadge() {
+  const focus = await loadFocus();
+  if (!focus) return;
+  const minutes = Math.max(1, Math.ceil((focus.endsAt - Date.now()) / 60000));
+  await chrome.action.setBadgeText({ text: `${minutes}m` });
+  await chrome.action.setTitle({ title: `Threadline: focusing on ${focus.category}` });
+}
+
+/** Collapses every category group except the one being focused on. */
+async function collapseOtherGroups(category) {
+  const groups = await chrome.tabGroups.query({});
+  for (const group of groups) {
+    if (!KNOWN_GROUP_TITLES.has(group.title)) continue;
+    const collapsed = group.title !== category;
+    if (group.collapsed !== collapsed) {
+      await editTabs(() => chrome.tabGroups.update(group.id, { collapsed })).catch(() => {});
+    }
+  }
+}
+
+async function startFocus(category, minutes) {
+  if (!KNOWN_GROUP_TITLES.has(category)) return { error: `Unknown category: ${category}` };
+  if (!(minutes > 0)) return { error: 'Focus needs a duration in minutes' };
+
+  const focus = { category, endsAt: Date.now() + minutes * 60000, allowedHosts: [] };
+  await chrome.storage.local.set({ [FOCUS_KEY]: focus });
+  await chrome.alarms.create(FOCUS_END_ALARM, { when: focus.endsAt });
+  await chrome.alarms.create(FOCUS_TICK_ALARM, { periodInMinutes: 1 });
+  await showFocusBadge();
+  await collapseOtherGroups(category);
+  return { ok: true, focus };
+}
+
+async function endFocus() {
+  await chrome.storage.local.remove(FOCUS_KEY);
+  await chrome.alarms.clear(FOCUS_END_ALARM);
+  await chrome.alarms.clear(FOCUS_TICK_ALARM);
+  await chrome.action.setBadgeText({ text: '' });
+  await chrome.action.setTitle({ title: 'Threadline' });
+  const groups = await chrome.tabGroups.query({});
+  for (const group of groups) {
+    if (KNOWN_GROUP_TITLES.has(group.title) && group.collapsed) {
+      await editTabs(() => chrome.tabGroups.update(group.id, { collapsed: false })).catch(() => {});
+    }
+  }
+  return { ok: true };
+}
+
+/** Holds a tab to the focused category, if one is running. */
+async function enforceFocus(tabId) {
+  const focus = await loadFocus();
+  if (!focus) return;
+
+  const placement = (await loadPlacements())[tabId];
+  let tab;
+  try {
+    tab = await chrome.tabs.get(tabId);
+  } catch {
+    return;
+  }
+  if (!placement || !/^https?:/.test(tab.url || '') || placement.url !== withoutHash(tab.url)) return;
+
+  const onTask = placement.category === focus.category || placement.subcategory === 'Unsure'
+    || focus.allowedHosts.includes(safeHostname(tab.url));
+  if (onTask) {
+    await showFocusBadge();
+    return;
+  }
+
+  if (await isStrictFocusOn()) {
+    const params = new URLSearchParams({ url: tab.url, category: placement.category });
+    await chrome.tabs.update(tabId, { url: chrome.runtime.getURL(`blocked.html?${params}`) });
+  } else {
+    await chrome.action.setBadgeText({ text: '!' });
+  }
+}
+
+async function allowSiteDuringFocus(url) {
+  const focus = await loadFocus();
+  if (focus) {
+    focus.allowedHosts.push(safeHostname(url));
+    await chrome.storage.local.set({ [FOCUS_KEY]: focus });
+  }
+  return { ok: true };
+}
+
+/** Leaves the blocked page for a tab in the focused category, or closes it. */
+async function leaveBlockedPage(tabId) {
+  const focus = await loadFocus();
+  const placements = await loadPlacements();
+  const tabs = await chrome.tabs.query({ lastFocusedWindow: true });
+  const onTask = tabs.find(tab => tab.id !== tabId && placements[tab.id]?.category === focus?.category);
+  if (onTask) await chrome.tabs.update(onTask.id, { active: true });
+  if (tabId !== undefined) await chrome.tabs.remove(tabId);
+  return { ok: true };
+}
+
+chrome.alarms.onAlarm.addListener(async ({ name }) => {
+  if (name === FOCUS_END_ALARM) await endFocus();
+  if (name === FOCUS_TICK_ALARM) {
+    if (await loadFocus()) await showFocusBadge();
+    else await endFocus();
+  }
+});
+
+// Reachable from the service worker console until focus mode has screens.
+globalThis.threadline = {
+  startFocus,
+  endFocus,
+  setStrictFocus: (enabled) => chrome.storage.local.set({ [STRICT_FOCUS_KEY]: enabled }),
+  getFocus: loadFocus,
+  runAutoSort,
+  undoLastSort,
+};
 
 // ─── Message Handlers (from popup and content scripts) ────────────────────
 
@@ -410,6 +845,7 @@ async function handleMessage(message, sender) {
             store[tabId] = { ...store[tabId], ...message.payload };
           }
         });
+        scheduleAutoSort();
       }
       return { ok: true };
     }
@@ -455,6 +891,41 @@ async function handleMessage(message, sender) {
       // Popup has sorted the tabs and wants to rearrange them in Chrome
       return applyTabOrder(message.orderedTabIds);
     }
+
+    case 'APPLY_SORT':
+      return applySort(message.entries);
+
+    case 'UNDO_SORT':
+      return undoLastSort();
+
+    case 'GET_SORT_STATE': {
+      const { [UNDO_KEY]: undo } = await chrome.storage.session.get(UNDO_KEY);
+      return { autoSort: await isAutoSortOn(), canUndo: !!undo, placements: await loadPlacements() };
+    }
+
+    case 'SET_AUTO_SORT':
+      await chrome.storage.local.set({ [AUTO_SORT_KEY]: message.enabled });
+      if (message.enabled) scheduleAutoSort();
+      return { ok: true };
+
+    case 'START_FOCUS':
+      return startFocus(message.category, message.minutes);
+
+    case 'END_FOCUS':
+      return endFocus();
+
+    case 'GET_FOCUS':
+      return { focus: await loadFocus(), strict: await isStrictFocusOn() };
+
+    case 'SET_STRICT_FOCUS':
+      await chrome.storage.local.set({ [STRICT_FOCUS_KEY]: message.enabled });
+      return { ok: true };
+
+    case 'FOCUS_ALLOW':
+      return allowSiteDuringFocus(message.url);
+
+    case 'FOCUS_GO_BACK':
+      return leaveBlockedPage(sender.tab?.id);
 
     case 'SAVE_SNAPSHOT': {
       // Save current tab state as a named session
