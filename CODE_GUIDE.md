@@ -7,9 +7,9 @@ and understand every line, not just the vibe.
 **How the pieces fit together, in one sentence each:**
 `content_script.js` reads each page → `background.js` stores tab metadata and
 watches for behavioural patterns → the popup (`App.jsx`) triggers
-`pipeline.js`, which runs the five-stage ML pipeline and returns a sorted,
-labelled, personalised chain → `TabChain.jsx` renders it and captures drag
-corrections → those corrections flow back into `nn.js`'s training loop.
+`pipeline.js`, which runs the ML pipeline and returns a sorted, labelled chain →
+`TabChain.jsx` renders it and captures drag corrections → if personalisation is
+on, those corrections train the weights in `personalise.js`.
 
 ---
 
@@ -76,7 +76,7 @@ this explicitly, and it's the right mental model for MV3).
 
 **Message handlers** (`chrome.runtime.onMessage`): `GET_ALL_TABS`,
 `REQUEST_SORT` (hands raw tab data to the popup — the actual ML runs in the
-popup, not here, because TF.js needs a WebGL-capable context), `APPLY_ORDER`
+popup, not here, because the model loads there), `APPLY_ORDER`
 (moves tabs via `chrome.tabs.move`), `SAVE_SNAPSHOT`/`GET_SNAPSHOTS` (session
 bookmarking, capped at 10).
 
@@ -89,98 +89,84 @@ pair gets queued into `implicit_training_candidates` — tabIds only, no
 embeddings (the service worker can't compute those). `pipeline.js` drains
 this queue once it has embeddings available (see `implicitFeedback.js`).
 
-**Why `transitionCount` matters:** it used to be read by `nn.js`'s behaviour
-vector but nothing ever wrote it — silently always 0. It's now incremented on
-every genuine tab switch, so that NN input feature is finally alive.
+**`transitionCount`** counts genuine tab switches. Nothing reads it for sorting
+since the neural network was removed; it's still recorded locally.
 
 ---
 
 ## 4. ML pipeline (`src/ml/`)
 
-### 4a. `embedder.js` — text → 512-dim vectors
+### 4a. `embedder.js` — text → 384-dim vectors
 
-Wraps `@tensorflow-models/universal-sentence-encoder` (USE). Two exports:
+Runs `all-MiniLM-L6-v2`, a pretrained sentence-embedding network, through
+Transformers.js and ONNX Runtime on WebAssembly. Main exports:
 
-- **`embedTexts(texts)`**: lazy-loads the model once (`_model` module cache —
-  loading takes 1-2s, so you don't want to repeat it), calls `model.embed()`,
-  converts the resulting tensor to a plain JS array, and **disposes the
-  tensor** immediately (`embeddingTensor.dispose()`). This last part matters:
-  TF.js tensors live on the GPU and don't get garbage-collected by the JS
-  engine — forgetting `.dispose()` is *the* classic TF.js memory leak.
+- **`embedTexts(texts)`**: lazy-loads the model once (`_extractor` module cache)
+  from the extension's own `model/` folder, using the runtime in `ort/`, with
+  remote loading switched off. It averages the token vectors and normalises the
+  result to unit length (`pooling: 'mean', normalize: true`).
 
-- **`cosineSimilarity(a, b)`**: `dot(a,b) / (|a| * |b|)`. The code comment
-  explains the choice well: cosine measures the *angle* between vectors, so a
-  one-sentence title and a five-sentence description of the same topic still
-  score as similar — Euclidean distance would incorrectly penalise the
-  length difference.
+- **`cosineSimilarity(a, b)`**: `dot(a,b) / (|a| * |b|)`. Cosine measures the
+  *angle* between vectors, so a one-sentence title and a five-sentence description
+  of the same topic still score as similar, where Euclidean distance would penalise
+  the length difference.
 
-### 4b. `graph.js` — similarity matrix → Maximum Spanning Tree → order
+**Why this model:** it replaced Universal Sentence Encoder because it tells close
+topics apart far better. `training/` holds scripts to fine-tune it; so far neither
+fine-tuned version has beaten the pretrained one on tabs.
 
-Three stages:
+### 4b. `graph.js` — similarity matrix → the chain
 
 1. **`buildSimilarityMatrix`**: all-pairs cosine similarity, clamped to
-   `[0,1]` (negative cosine values are treated as "no connection" for MST
-   purposes, not "anti-correlated").
+   `[0,1]` (negative cosine values are treated as "no connection", not
+   "anti-correlated").
 
-2. **`buildMST`**: Kruskal's algorithm, inverted for *maximum* spanning tree
-   (sort edges descending, keep the strongest similarity edges that don't
-   create a cycle). Cycle detection uses a **Union-Find / Disjoint-Set**
-   structure with both optimisations that make it fast:
-   - *path compression* in `find()` — flattens the tree on every lookup
-   - *union by rank* in `union()` — always attaches the shorter tree under
-     the taller one
+2. **`buildMST` + `traverseMST`** give the first candidate. Kruskal's algorithm,
+   inverted for a *maximum* spanning tree (sort edges descending, keep the
+   strongest that don't create a cycle). Cycle detection uses a **Union-Find /
+   Disjoint-Set** with *path compression* in `find()` and *union by rank* in
+   `union()`, so each operation is amortised near-O(1) and the run is
+   `O(E log E)`. A DFS from the highest-degree node, visiting neighbours in
+   descending weight order, turns the tree into a line.
 
-   Together these make each operation amortised near-O(1), so the whole
-   Kruskal's run is `O(E log E)` dominated by the initial sort.
+3. **`bestGreedyOrder`** gives the second candidate: a "go to the most similar
+   unvisited tab" walk from every possible start, keeping the strongest.
 
-3. **`traverseMST`**: DFS over the resulting tree, starting from the
-   highest-degree node (the most "central" tab), visiting neighbours in
-   descending edge-weight order. The idea is that MST considers global
-   structure first, where a greedy "go to the most similar tab" walk only looks
-   one step ahead. **Measured, though, the greedy walk scores slightly higher**
-   (see the README's Evaluation section), probably because a DFS jumps back up
-   the tree whenever it finishes a branch.
+4. **`improveChain`** is local search on either candidate. It keeps making small
+   changes that raise the total similarity between neighbours until none is left:
+   *2-opt* reverses a stretch to undo crossed connections, and *or-opt* moves a
+   run of 1-3 tabs to rescue ones left stranded. A DFS jumps back up the tree when
+   it finishes a branch, and greedy strands a few tabs for the end, so each has
+   flaws this step repairs.
 
-`annotateChain` just walks the final order and records the similarity to the
-*next* tab, which the UI uses to draw the connector-line opacity and the `%`
-label between cards.
+5. **`buildChainOrder`** runs both candidates through `improveChain` and keeps the
+   higher total, which needs no topic labels. It beat both methods alone on
+   neighbour agreement at every size in the README's Evaluation section.
+
+`annotateChain` records the similarity to the *next* tab, which the UI uses for
+the connector opacity and the `%` label. `reannotateChain` redoes that after a drag.
 
 ### 4c. `clusterer.js` — embeddings → topic colour groups
 
-Pipeline: `512-dim embeddings → UMAP (→2D) → k-means → cluster labels`.
+Pipeline: `embeddings → cosine similarities → agglomerative clustering →
+best silhouette`.
 
-- **Why reduce to 2D first?** K-means in 512 dimensions suffers the "curse of
-  dimensionality" — in high dimensions, all points end up roughly equidistant
-  from each other, and Euclidean-distance-based clustering stops meaning
-  anything. UMAP compresses to 2D while preserving *neighbourhood* structure
-  (things close in 512D stay close in 2D), giving k-means something sane to
-  work with.
-- **`seededRandom` (Mulberry32 PRNG)**: UMAP needs a random number source
-  internally (for its stochastic gradient descent-like layout optimisation),
-  but a plain `Math.random()` would make the same tab set produce a
-  *different* layout every time you sort. A seeded PRNG makes it
-  deterministic — reproducible clusters for the same input, in the same order.
-  `canonicalTabOrder` in `pipeline.js` supplies that order, so rearranging the
-  tabs doesn't change the result.
-- **`kmeans` + `kmeansppInit`**: standard Lloyd's-algorithm k-means, but with
-  **k-means++ initialisation** — instead of picking k random starting
-  centroids (which can accidentally clump two centroids together and produce
-  an empty or garbage cluster), it picks each subsequent centroid with
-  probability proportional to its squared distance from already-chosen ones,
-  spreading the starting points across the data.
-- **`estimateK` (silhouette)**: for k = 2..min(8, N/2) it runs seeded k-means
-  and scores each result with the mean silhouette (how much closer each point
-  is to its own cluster than to the next-nearest one), keeping the best k. Three
-  tabs or fewer skip clustering. This replaced an elbow-method version whose
-  second-difference search could only return 2 to maxK-1: exactly 2 clusters for
-  up to 15 tabs, never more than 5 for any input. There is deliberately no
-  "k = 1" fallback: measured here, the best silhouette of structureless scatter
-  overlaps that of real multi-topic tab sets, so no threshold separates them.
-- **Honest gap, documented in the file itself**: the README describes this
-  step as HDBSCAN; the actual code is k-means. The comment explains why (no
-  maintained browser-compatible HDBSCAN library existed as of the project's
-  original research), and flags it as a real open question (OQ-02). See the
-  HDBSCAN feasibility discussion at the end of this guide.
+- **`agglomerate`**: average-linkage clustering. Every tab starts alone, and the
+  two groups most similar on average merge until one is left. The similarity
+  between a merged group and the others is updated by a size-weighted average
+  (Lance-Williams) rather than recomputed. Each step is a candidate clustering.
+- **`silhouetteScore`**: how much closer each tab is to its own group than to the
+  next-nearest one, using `1 - cosine` as distance. It picks among k =
+  2..min(8, N/2).
+- **`SAME_TOPIC_SIMILARITY`**: if even the final merge joins groups at least this
+  alike, everything is one topic. It's tied to the model's scale and is a trade-off:
+  at 0.3 close topics stay apart, but a broad single topic usually splits in two.
+- **Three tabs or fewer** form one group.
+- **No randomness**, and `canonicalTabOrder` in `pipeline.js` removes any
+  dependence on tab order, so the same tabs always get the same groups.
+- **What this replaced**: UMAP + seeded k-means, which usually found 2 or 3 groups
+  however many topics were open. ARI on real page text at 20 tabs rose from about
+  0.28 to 0.82, before the model change. `CONCEPT_CLUSTER.md` still covers UMAP and k-means as background.
 
 ### 4d. `labeler.js` — cluster index → human-readable name *(new)*
 
@@ -208,95 +194,42 @@ rather than per tab**.
 
 ### 4e. `recency.js` — "how long since this tab was touched" *(new)*
 
-One function, shared by two consumers that need to agree with each other:
-`nn.js`'s behaviour vector (a real training feature) and the UI's visual
-fade (`TabChain.jsx`, `App.jsx`'s idle list).
+`computeRecencyNorm` returns 1 for a tab touched just now, falling to 0 at 30
+minutes. The UI fades stale tabs with it. `formatIdleDuration` gives the "idle
+12m" tooltip text. Both take an injectable `now`, so tests pass a fixed timestamp
+and get deterministic results instead of depending on the clock.
 
-`computeRecencyNorm(lastActive, now)` returns 1 if touched right now, 0 if
-untouched for 30+ minutes (`RECENCY_CAP_MS`), linear in between. Deliberately
-takes `now` as an injectable parameter (defaults to `Date.now()`) so tests can
-pass a fixed timestamp and get deterministic results instead of depending on
-wall-clock time.
+### 4f. `personalise.js` — the optional learned weighting
 
-### 4f. `nn.js` — the personalisation model (V3)
+Off unless the user ticks **Personalise sorting (experimental)**. For unit-length
+vectors, cosine similarity is `Σ a[i] * b[i]`. This learns one weight per
+dimension:
 
-This is the most involved file, and the part most likely to come up in an
-interview, so it's worth reading top to bottom in the source. Summary of the
-key ideas:
+`score(a, b) = Σ (1 + adjustment[i]) * a[i] * b[i]`
 
-**The behaviour vector** (`tabToBehaviourVector`) turns raw tab usage into 6
-normalised numbers: `[dwellNorm, revisitNorm, hourSin, hourCos,
-transitionNorm, recencyNorm]`.
-- Dwell/revisit/transition are capped and linearly normalised to `[0,1]`
-  (e.g. dwell caps at 10 minutes — beyond that, "more open" stops being
-  informative).
-- Hour-of-day uses **cyclical sin/cos encoding**: mapping the 24-hour clock
-  onto a unit circle so that hour 23 and hour 0 end up numerically close
-  (a plain integer 0-23 encoding would treat 23 and 0 as maximally far
-  apart, which is wrong — they're one hour apart on a clock).
-- `recencyNorm` (new) comes from `recency.js`.
+- **It starts as cosine.** All adjustments start at 0, and regularisation pulls
+  them back, so scant or inconsistent data can't wander far.
+- **It compares tabs directly and is symmetric by construction**, so tab order
+  can't matter.
+- **Training** (`trainAdjustments`) is logistic loss with plain gradient descent:
+  a few milliseconds, no random steps.
+- **`shouldRetrain`**: train at 15 examples, then after every 5 new ones. It
+  compares *lifetime* counts, because the stored count stops growing at the
+  200-example cap.
+- **`storeTrainingExample`**: embeddings are rounded to 4 decimals, roughly 6 KB
+  per example, about 1.2 MB at the cap.
 
-**Why V1 (naive concatenation) was wrong, and V2/V3 fix it**: if you
-concatenate two 512-dim content embeddings and two 5-dim behaviour vectors
-into one 1034-element input and feed it to a single Dense layer, the content
-features occupy ~99% of the input. With random weight initialisation, the
-gradient signal from the tiny behavioural slice gets statistically swamped by
-the much larger content slice before the network has any chance to learn that
-dwell time matters at all.
-
-**The fix — parallel encoder streams, built with TF.js's Functional API**
-(not Sequential, which only supports one linear chain):
-```
-embA(512) ─┐ shared          ┐
-embB(512) ─┤ content encoder ├─ 32-dim each ─┐
-                                              ├─ concat(80) → fusion → score
-behA(5)   ─┐ shared           ┐
-behB(6)   ─┤ behaviour encoder├─ 8-dim each ──┘
-```
-Each modality gets its own small sub-network that compresses it to a fixed
-size *before* the streams meet at a `concatenate` layer. By the time fusion
-happens, all four streams contribute equal-sized representations — the
-network can learn "what makes content similar" and "what makes behaviour
-similar" somewhat independently, then combine those conclusions. This
-stream-then-fuse pattern is the standard approach in multimodal research
-(CLIP, ALIGN, and most vision-language models follow the same shape).
-
-**Weight sharing**: the same `contentDense1`/`contentDense2` layer objects
-are `.apply()`'d to both stream A and stream B (same for the behaviour
-encoder). This halves the parameter count and means both tabs are encoded by
-exactly the same function, whichever slot they land in.
-
-**Symmetry is not automatic.** Sharing the encoders does not make the whole
-network symmetric: the fusion layer sees `[encA, encB, behA, behB]` in a fixed
-order, so `f(A, B)` and `f(B, A)` differ (`tests/symmetry.test.js` shows this
-on a fresh model). Two measures remove the dependence on which tab is listed
-first: `trainModel` adds a swapped copy `(B, A)` of every example, and
-`scoreAllPairs` scores each pair in both orders and averages them. (An earlier
-version of these notes claimed weight sharing alone guaranteed symmetry. It
-doesn't.)
-
-**Training — contrastive learning**: there's no ground-truth "tab A and tab B
-are definitely related" label sitting around. Training examples come from
-implicit signals — `label=1` for pairs the user placed adjacent (drags) or
-kept switching between (implicit bursts), `label=0` for pairs the user broke
-apart. `trainModel` fits with binary cross-entropy on this pairwise labelled
-data (needs ≥4 examples to run at all; `NN_ACTIVATION_THRESHOLD = 15` before
-the model's output actually gets *used* in sorting, to avoid personalising
-off a statistically tiny sample).
-
-**Inference** — `scoreTabPair` (one pair) and `scoreAllPairs` (batched: all
-`N*(N-1)/2` pairs in a single `model.predict()` call instead of looping,
-which matters because each individual `predict()` call has fixed overhead
-that dominates at small batch sizes).
-
-**Persistence** — `chrome.storage.local` can't store tensors directly, so
-`saveModel` manually serialises each weight tensor's shape/data/name to
-JSON, and `loadSavedModel` reconstructs tensors from that JSON and sets them
-back onto a freshly-built model. A `nn_version` field guards against loading
-incompatible weights — V1→V2 changed the input wiring, V2→V3 changed
-`BEHAV_DIM` from 5→6; loading old weights into a differently-shaped model
-would either crash or silently corrupt, so mismatched versions are discarded
-and training starts fresh instead.
+**The honest story, worth telling in an interview:** this file used to hold a
+72,665-parameter two-tower network with behaviour features, trained on the user's
+drags. Measuring it on tabs left out of training showed it made sorting worse as
+it got more data (0.57 to 0.38 neighbour agreement at 60 examples), even after
+cleaning up the labels. The neural network that now does the work is the pretrained
+embedding model in `embedder.js`, and fine-tuning it is the next experiment
+(`training/README.md`). A
+smaller comparison network and a low-rank model also did damage when a simulated
+user's corrections were inconsistent. This small model does no real harm, but stays
+within about 0.02 of cosine, so it hasn't shown it learns much either. That's why
+it's opt-in. The old network is in Git history.
 
 ### 4g. `feedback.js` — drag reorders → training pairs *(new)*
 
@@ -324,28 +257,25 @@ queue is cleared unconditionally afterward — candidates aren't retried, so a
 closed tab's stale candidate doesn't linger forever.
 
 This exists because `background.js` can *observe* which tabIds got bounced
-between, but can't *embed* them (Universal Sentence Encoder needs the
-popup's WebGL context) — so the tabId-only queue is the hand-off point
+between, but can't *embed* them (the language model loads in the popup) — so the tabId-only queue is the hand-off point
 between "observed in the service worker" and "converted to a real training
 example in the popup."
 
 ### 4i. `pipeline.js` — orchestrates all of the above
 
-`runMLPipeline(tabs, onProgress)` runs, in order:
-1. Embed all tabs (USE)
-2. **(new)** Drain implicit tab-switch-burst candidates into training examples
-3. Build the baseline cosine similarity matrix
-4. If ≥15 training examples exist, run the NN over all pairs and **blend**
-   `0.7 * NN + 0.3 * cosine` — the cosine term acts as a regulariser so a
-   still-sparse personalisation model can't produce wildly wrong orderings
-5. Build the MST, traverse it, annotate similarities
-6. Cluster (UMAP + k-means)
-7. **(new)** Label each cluster (TF-IDF)
+`runMLPipeline(tabs, onProgress)` first puts the tabs in `canonicalTabOrder`, so
+tab-strip order can't affect anything. Then it runs, in order:
+1. Embed all tabs (all-MiniLM-L6-v2)
+2. Drain implicit tab-switch-burst candidates into training examples
+3. Build the cosine similarity matrix
+4. If personalisation is on and weights exist, use `scoreAllPairs` instead
+5. `buildChainOrder`, then annotate similarities
+6. Cluster (agglomerative)
+7. Label each cluster (TF-IDF)
 
-Returns `{ chain, clusters, clusterLabels, method, implicitExampleCount }`.
-`method` is `'cosine'` or `'personalised'` depending on whether the NN was
-active for that particular sort — useful for debugging *why* two sorts of
-the same tabs came out differently.
+Returns `{ chain, clusters, clusterLabels, simMatrix, method, implicitExampleCount }`.
+`method` is `'cosine'` or `'personalised'`, and the popup uses it to report what
+the sort actually did. `simMatrix` lets it recalculate percentages after a drag.
 
 ---
 
@@ -363,26 +293,19 @@ Top-level state machine with three views: `idle` (tab count + Sort button),
 `sorting` (progress spinner), `sorted` (the chain + Apply/Cancel).
 
 **New responsibilities added in this pass:**
-- `handleReorder(reordered)`: called by `TabChain` after a drag. Recalculates
-  the similarity shown between neighbours (`reannotateChain`), diffs old vs. new
-  chain via `deriveTrainingPairs`, stores each resulting pair as a training
-  example, and calls `maybeRetrain`.
-- `maybeRetrain()`: asks `shouldRetrain(seen, nn_trained_count)` in
-  `nn.js` — train once 15 examples exist, then again after every 5 new ones —
-  so it does not retrain on every single drag (the popup would stutter and fit
-  a fresh model to one noisy correction at a time). It compares against the
-  count at the *last training run* rather than testing for exact counts: a
-  drag adds 2–6 examples at once, and an exact-count check (the earlier
-  version) skipped training whenever the total jumped past 15, 20, 25...
-  `seen` is a lifetime count, because the stored count stops growing at the
-  200-example cap. Only one training run happens at a time.
-- `handleSort` now also refreshes the example count and checks for a retrain
-  *after* the pipeline runs, since implicit pairs can cross the training
-  threshold with zero drags involved.
-- `LearningStatus` and `ClusterLegend` are small presentational components
-  defined at the bottom of the file — status text ("7/15 corrections
-  learned" → "✓ Sorting personalised to you") and colour-coded cluster name
-  chips, respectively.
+- `handleReorder(reordered, movedTabId)`: called by `TabChain` after a drag.
+  Recalculates the similarity shown between neighbours (`reannotateChain`), diffs
+  old vs. new chain via `deriveTrainingPairs`, keeping only pairs that involve the
+  dragged tab, stores them, and calls `maybeRetrain`. Examples are collected even
+  with personalisation off.
+- `maybeRetrain()`: does nothing unless personalisation is on, then asks
+  `shouldRetrain(seen, nn_trained_count)` in `personalise.js`. `seen` is a lifetime
+  count, because the stored count stops growing at the 200-example cap.
+- `handleSort` also refreshes the example count and checks for a retrain *after*
+  the pipeline runs, since implicit pairs can cross the threshold with zero drags.
+- `LearningStatus` and `ClusterLegend` are small presentational components at the
+  bottom of the file. The status reports the last sort's actual `method` ("✓ This
+  sort used your corrections"), so it can't claim something that didn't happen.
 - The idle tab list now fades each row by `computeRecencyNorm` and shows an
   "idle Nm/h" tooltip — the staleness cue applies before you even sort, not
   just in the chain view.
@@ -426,18 +349,18 @@ line), `.cluster-legend` / `.cluster-chip` (the colour+name chips), and
 
 All plain Node scripts (`node tests/x.test.js`), no test framework — each
 file exits non-zero on failure, which is enough for a project this size and
-keeps the dependency list short. `npm test` chains all fourteen files (142 tests).
+keeps the dependency list short. `npm test` chains all the test files.
 `tests/helpers/chromeMock.js` provides an in-memory fake of `chrome.storage`
 and the `chrome.tabs` event hooks, plus the small runner the newer files use.
 
 | File | What it proves |
 |---|---|
-| `graph.test.js` | MST has exactly N-1 edges, all nodes reachable, DFS visits every node once, clusters stay contiguous in the traversal |
-| `nn.test.js` | Behaviour vector shape/ranges, dwell/revisit capping, cyclical hour encoding correctness, recencyNorm bounds |
-| `clusterer.test.js` | Cluster count matches tab count, UMAP output is 2D and finite, distinct topics get distinct clusters |
-| `kselection.test.js` | Silhouette-based k: 2, 3 and 5 separated blobs give k = 2, 3, 5; never above 8; deterministic; silhouette scores behave on perfect, wrong and singleton clusterings |
+| `graph.test.js` | MST has N-1 edges, DFS visits every node once, `buildChainOrder` returns every tab once and is at least as strong as MST or greedy alone, local search never lowers the total, 200 tabs finish in under a second |
+| `clusterer.test.js` | One label per tab, distinct topics get distinct clusters, handles one or two tabs |
+| `kselection.test.js` | The right number of groups for 1, 2, 3 and 5 separate topics; never above 8 or N/2; deterministic; silhouette scores behave on perfect, wrong and singleton clusterings |
 | `retrain.test.js` | `shouldRetrain`: trains at 15, still triggers when the count jumps past a checkpoint (13 → 16), waits for 5 new examples between trainings, keeps training past the 200-example storage cap |
-| `symmetry.test.js` | The network has 72,665 parameters; a raw prediction depends on tab order but `scoreAllPairs` does not; training works on swapped copies and rejects fewer than 4 examples |
+| `personalise.test.js` | Off by default; with no adjustment it equals cosine; always symmetric and on the 0-1 scale; training moves scores the right way, is deterministic and fast; inconsistent corrections stay near cosine |
+| `embedder.test.js` | The real bundled model loads with no network, gives unit-length 384-dim vectors, ranks related text above unrelated, survives blank text |
 | `determinism.test.js` | The same tabs always get identical cluster assignments (k-means is seeded), whatever order they arrive in (`canonicalTabOrder`) |
 | `feedback.test.js` | Drag-to-pair derivation: new adjacency → positive, broken adjacency → negative, untouched pairs → no signal |
 | `implicitFeedback.test.js` | Tab-switch pairs become one positive + one weak negative, closed tabs are dropped, embeddings are stored rounded and capped at 200 examples |
@@ -459,18 +382,19 @@ and that `dist/` contains everything Chrome needs.
    dwell, revisit, transition, lastActive — everything accumulated since
    the tabs were opened).
 2. `runMLPipeline(tabs, onProgress)`:
-   - `embedTexts` → each tab gets a 512-dim vector
+   - `embedTexts` → each tab gets a 384-dim vector
    - `consumeImplicitPairs` → any queued tab-switch-burst pairs become
      training examples right now, using the embeddings we just computed
-   - `buildSimilarityMatrix` → baseline cosine matrix
-   - if ≥15 stored examples: `scoreAllPairs` (NN) blended 70/30 with cosine
-   - `buildMST` → `traverseMST` → `annotateChain` → the final chain order
+   - `buildSimilarityMatrix` → cosine matrix
+   - if personalisation is on and trained: `scoreAllPairs` replaces it
+   - `buildChainOrder` → `annotateChain` → the final chain order
    - `clusterTabs` → `labelClusters` → colour + name per topic group
 3. `App` renders `TabChain` (draggable cards) + `ClusterLegend` +
    `LearningStatus`.
 4. If you drag a card: `handleReorder` → `deriveTrainingPairs` →
    `storeTrainingExample` (persisted to `chrome.storage.local`) →
-   `maybeRetrain` (trains once 15 examples exist, then after every 5 new ones).
+   `maybeRetrain` (if personalisation is on, trains once 15 examples exist, then
+   after every 5 new ones).
 5. "Apply Order" → `chrome.tabs.move` puts your actual browser tabs in that
    order.
 

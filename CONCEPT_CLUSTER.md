@@ -7,7 +7,11 @@ in the order you'd hit them reading the code top to bottom. Each entry says
 ---
 
 ## 1. Sentence embeddings & semantic similarity
-**Where it's used:** `embedder.js`
+**Where it's used:** `embedder.js`, which now runs all-MiniLM-L6-v2. The links below
+cover Universal Sentence Encoder, the model used before; the ideas carry over. For
+the current model see https://www.sbert.net/ and
+https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2. For fine-tuning, see
+`training/README.md`.
 
 - **Official USE tutorial (TensorFlow Hub)** — the exact model this project
   loads, with the same "embed sentences → compare via similarity" workflow:
@@ -37,7 +41,8 @@ in the order you'd hit them reading the code top to bottom. Each entry says
   https://www.geeksforgeeks.org/dsa/depth-first-search-or-dfs-for-a-graph/
 
 ## 3. Dimensionality reduction — UMAP
-**Where it's used:** `clusterer.js`
+**Where it's used:** no longer used. `clusterer.js` used it until measurement
+showed clustering directly on similarities works better. Kept as background.
 
 - **"Understanding UMAP" (Google PAIR)** — an *interactive* explorable
   explanation, not a static article. Lets you drag parameters and watch
@@ -49,7 +54,8 @@ in the order you'd hit them reading the code top to bottom. Each entry says
   https://www.datacamp.com/tutorial/understanding-umap-guide-to-dimensionality-reduction
 
 ## 4. Clustering — k-means, k-means++, silhouette score
-**Where it's used:** `clusterer.js`
+**Where it's used:** `clusterer.js` uses the silhouette score, with agglomerative
+clustering (average linkage) instead of k-means. K-means is kept as background.
 
 - **StatQuest: K-means clustering (YouTube)** — Josh Starmer's explanation is
   the standard first stop for this topic; walks through assignment,
@@ -80,7 +86,8 @@ in the order you'd hit them reading the code top to bottom. Each entry says
   https://www.geeksforgeeks.org/machine-learning/understanding-tf-idf-term-frequency-inverse-document-frequency/
 
 ## 6. Neural network architecture — functional API, multi-input models
-**Where it's used:** `nn.js`
+**Where it's used:** no longer used. `nn.js` held a neural network until measurement
+showed it made sorting worse (see Git history and `CODE_GUIDE.md`).
 
 - **Official TensorFlow.js guide: "Models and Layers"** — covers exactly the
   `tf.input()` / `.apply()` / `tf.model({inputs, outputs})` pattern
@@ -93,7 +100,7 @@ in the order you'd hit them reading the code top to bottom. Each entry says
   https://www.tensorflow.org/guide/keras/functional_api
 
 ## 7. Siamese / twin-network architectures & contrastive learning
-**Where it's used:** `nn.js` (the shared content/behaviour encoders), `feedback.js` + `implicitFeedback.js` (how the labels are generated)
+**Where it's used:** the old network's shared encoders (see Git history), `feedback.js` + `implicitFeedback.js` (how the labels are generated)
 
 - **GeeksforGeeks: "Siamese Neural Network in Deep Learning"** — clean
   explanation of weight sharing and why it forces a *consistent* similarity
@@ -106,7 +113,7 @@ in the order you'd hit them reading the code top to bottom. Each entry says
   https://medium.com/@raghavan99o/siamese-networks-and-contrastive-loss-explained-a-practical-guide-for-engineers-a2a7c79bb556
 
 ## 8. Cyclical time encoding (sin/cos for hour-of-day)
-**Where it's used:** `nn.js`'s `tabToBehaviourVector`
+**Where it's used:** no longer used; the old network's `tabToBehaviourVector` (see Git history)
 
 - No single canonical tutorial, but search **"cyclical encoding time features
   sin cos"** — this trick shows up constantly in time-series/forecasting
@@ -136,7 +143,7 @@ If you're going through this linearly rather than jumping around:
 2. VisuAlgo MST (§2) — watch it run a few times before reading `graph.js`.
    Then cp-algorithms Union-Find, since Kruskal's makes no sense without it.
 3. PAIR's Understanding UMAP (§3), then StatQuest k-means (§4) — in that
-   order, since `clusterer.js` runs UMAP *before* k-means for a reason
+   order, as background on how the clustering step used to work
    explained in both.
 4. TF.js Models and Layers (§6) → Siamese networks (§7) — read the
    architecture guide first so the *mechanism* (`tf.model`, `.apply()`)

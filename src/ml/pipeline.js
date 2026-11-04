@@ -1,16 +1,11 @@
 /**
- * THREADLINE — pipeline.js (V2)
+ * THREADLINE — pipeline.js
  *
- * Orchestrates the full ML sort in 5 steps:
- *   1. Embed       → USE 512-dim vectors per tab
+ * Orchestrates the full ML sort in 4 steps:
+ *   1. Embed       → one vector per tab (all-MiniLM-L6-v2)
  *   2. Similarity  → N×N cosine similarity matrix
- *   3. MST         → Maximum Spanning Tree (Kruskal's)
- *   4. Traverse    → DFS traversal order
- *   5. Cluster     → UMAP + k-means topic labels
- *
- * V2 change: NN personalisation uses scoreAllPairs() (one batched model.predict
- * call) instead of the V1 loop that called scoreTabPair N*(N-1)/2 times.
- * For 20 tabs that's 190 individual predict calls in V1 vs 1 call in V2.
+ *   3. Chain       → best of MST + DFS and greedy, polished by local search
+ *   4. Cluster     → agglomerative topic groups
  *
  * @param {Array}    tabs       - Tab objects from background.js
  * @param {Function} onProgress - UI progress string callback
@@ -18,23 +13,19 @@
  */
 
 import { embedTexts, cosineSimilarity }                           from './embedder.js';
-import { buildSimilarityMatrix, buildMST, traverseMST, annotateChain } from './graph.js';
+import { buildSimilarityMatrix, buildChainOrder, annotateChain } from './graph.js';
 import { clusterTabs }                                             from './clusterer.js';
 import { labelClusters }                                           from './labeler.js';
 import { consumeImplicitPairs }                                    from './implicitFeedback.js';
-import {
-  loadSavedModel,
-  scoreAllPairs,
-  NN_ACTIVATION_THRESHOLD,
-} from './nn.js';
+import { isPersonalisationEnabled, loadAdjustments, scoreAllPairs } from './personalise.js';
 
 /**
  * Puts tabs into one fixed order that doesn't depend on the tab strip.
  *
  * WHY: nearly every step is sensitive to input order, even when seeded. The
- * embedding batch gives very slightly different numbers, UMAP amplifies them,
- * and graph ties break by index. So the same tabs could get different groups
- * and a different chain after Apply Order rearranged them.
+ * embedding batch gives very slightly different numbers, and ties in the graph
+ * and clustering steps break by index. So the same tabs could get different
+ * groups and a different chain after Apply Order rearranged them.
  */
 export function canonicalTabOrder(tabs) {
   const compare = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
@@ -60,7 +51,7 @@ export async function runMLPipeline(inputTabs, onProgress = () => {}) {
   const contents = tabs.map(t => t.content || t.title || t.url || 'untitled');
 
   // ── STEP 1: EMBED ─────────────────────────────────────────────────────
-  // Universal Sentence Encoder → 512-dim vector per tab.
+  // The language model turns each tab's text into a vector.
   // Stored on the tab object so NN training examples can reference them.
   onProgress('Loading language model...');
   const embeddings = await embedTexts(contents, onProgress);
@@ -75,47 +66,26 @@ export async function runMLPipeline(inputTabs, onProgress = () => {}) {
   const implicitCount = await consumeImplicitPairs(tabs);
 
   // ── STEP 2: BASELINE SIMILARITY MATRIX ────────────────────────────────
-  // Cosine similarity between all pairs. Always computed — used as fallback
-  // and as the 30% component of the personalised blend.
+  // Cosine similarity between all pairs.
   onProgress('Computing similarities...');
-  const cosineMatrix = buildSimilarityMatrix(embeddings, cosineSimilarity);
-  let simMatrix = cosineMatrix;
+  let simMatrix = buildSimilarityMatrix(embeddings, cosineSimilarity);
 
-  // ── STEP 2b: NN PERSONALISATION ───────────────────────────────────────
-  // Replaces cosine matrix with a personalised blend once enough training
-  // examples have been collected from user reorderings.
+  // ── STEP 2b: OPTIONAL PERSONALISATION ─────────────────────────────────
+  // Only if the user opted in and a training run has happened.
   let method = 'cosine';
-  const nnModel = await loadSavedModel();
-
-  if (nnModel) {
-    const { nn_training_examples } = await chrome.storage.local.get('nn_training_examples');
-    const exampleCount = nn_training_examples
-      ? JSON.parse(nn_training_examples).length
-      : 0;
-
-    if (exampleCount >= NN_ACTIVATION_THRESHOLD) {
+  if (await isPersonalisationEnabled()) {
+    const adjustments = await loadAdjustments();
+    if (adjustments?.length === embeddings[0].length) { // ignore weights from another model
       onProgress('Applying personalisation...');
-
-      // V2: single batched predict call for all N*(N-1)/2 pairs
-      const nnMatrix = await scoreAllPairs(tabs, nnModel);
-
-      // Blend: 70% NN + 30% cosine
-      // Full replacement risks weird results when training data is sparse.
-      // The blend ensures cosine acts as a regulariser.
-      simMatrix = blendMatrices(nnMatrix, cosineMatrix, 0.7, 0.3);
+      simMatrix = scoreAllPairs(tabs, adjustments);
       method = 'personalised';
     }
   }
 
-  // ── STEP 3: MAXIMUM SPANNING TREE ─────────────────────────────────────
-  // Kruskal's algorithm finds the tree of strongest similarity connections.
-  onProgress('Building relatability graph...');
-  const mst = buildMST(simMatrix, tabs.length);
-
-  // ── STEP 4: TRAVERSAL ─────────────────────────────────────────────────
-  // DFS on the MST → linear order where adjacent tabs share the most overlap.
+  // ── STEP 3: CHAIN ─────────────────────────────────────────────────────
+  // The strongest linear order we can find. See buildChainOrder in graph.js.
   onProgress('Finding your thread...');
-  const orderedIndices = traverseMST(mst, tabs.length);
+  const orderedIndices = buildChainOrder(simMatrix);
   const annotated      = annotateChain(orderedIndices, simMatrix);
 
   const chain = annotated.map(({ index, similarityToNext }, chainPos) => ({
@@ -125,32 +95,19 @@ export async function runMLPipeline(inputTabs, onProgress = () => {}) {
     similarityToNext,
   }));
 
-  // ── STEP 5: CLUSTER ───────────────────────────────────────────────────
-  // UMAP → k-means gives each tab a topic label for colour-coding.
+  // ── STEP 4: CLUSTER ───────────────────────────────────────────────────
+  // Agglomerative clustering gives each tab a topic label for colour-coding.
   onProgress('Identifying topics...');
   const clusterAssignments = clusterTabs(embeddings);
 
   const clusters = {};
   tabs.forEach((tab, i) => { clusters[tab.tabId] = clusterAssignments[i]; });
 
-  // ── STEP 6: LABEL CLUSTERS ─────────────────────────────────────────────
+  // ── STEP 5: LABEL CLUSTERS ─────────────────────────────────────────────
   // TF-IDF over each cluster's tab content picks 1-2 distinguishing words,
   // so the UI can show "React Hooks" / "Trip Planning" instead of just
   // colour dots. See labeler.js for why cluster-level (not tab-level) TF-IDF.
   const clusterLabels = labelClusters(tabs, clusterAssignments);
 
   return { chain, clusters, clusterLabels, simMatrix, method, implicitExampleCount: implicitCount };
-}
-
-/**
- * Blends two N×N matrices: result[i][j] = wA * a[i][j] + wB * b[i][j]
- * Preserves diagonal = 1 (a tab is always identical to itself).
- */
-function blendMatrices(a, b, wA, wB) {
-  return a.map((row, i) =>
-    row.map((val, j) => {
-      if (i === j) return 1;
-      return Math.max(0, Math.min(1, wA * val + wB * b[i][j]));
-    })
-  );
 }

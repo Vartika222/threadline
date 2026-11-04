@@ -23,3 +23,7 @@ coverage/
 # TF.js model cache (large binary files)
 *.bin
 !icons/*.png
+# Fine-tuning environments and output
+.venv-train/
+.venv-export/
+training/output/

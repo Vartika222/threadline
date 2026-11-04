@@ -5,9 +5,8 @@
  *          lexical baseline. Good for checking the harness works anywhere
  *          (no network, no model download). It is NOT the real model, so
  *          its numbers say nothing about Threadline's true quality.
- *   use  : the real Universal Sentence Encoder, exactly as the extension
- *          uses it (src/ml/embedder.js). Needs network access to download
- *          the model weights on first run.
+ *   minilm : the real all-MiniLM-L6-v2, exactly as the extension uses it
+ *          (src/ml/embedder.js), loaded from public/model/. Works offline.
  */
 
 const DIM = 512;
@@ -54,9 +53,11 @@ export async function getEmbedder(name) {
   if (name === 'hash') {
     return { name, embed: async (texts) => texts.map(hashEmbed) };
   }
-  if (name === 'use') {
-    const { embedTexts } = await import('../src/ml/embedder.js');
+  if (name === 'minilm') {
+    const { embedTexts, setModelRoot } = await import('../src/ml/embedder.js');
+    const { fileURLToPath } = await import('node:url');
+    setModelRoot(fileURLToPath(new URL('../public/model/', import.meta.url)));
     return { name, embed: (texts) => embedTexts(texts) };
   }
-  throw new Error(`Unknown embedder "${name}" — use "hash" or "use"`);
+  throw new Error(`Unknown embedder "${name}" — use "hash" or "minilm"`);
 }

@@ -15,7 +15,7 @@
  * to chrome.storage is lost. Keep UI state lightweight.
  */
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import TabChain, { CLUSTER_COLORS } from './TabChain.jsx';
 import SortButton from './SortButton.jsx';
 import { runMLPipeline } from '../ml/pipeline.js';
@@ -26,19 +26,13 @@ import {
   storeTrainingExample,
   loadTrainingExamples,
   loadExamplesSeen,
-  loadSavedModel,
-  buildModel,
-  trainModel,
-  saveModel,
+  trainAdjustments,
+  saveAdjustments,
   shouldRetrain,
-  NN_ACTIVATION_THRESHOLD,
-} from '../ml/nn.js';
-
-// Once past the activation threshold the model retrains every RETRAIN_EVERY
-// new examples (see shouldRetrain in nn.js) rather than on every single drag.
-// Retraining is a few hundred ms of blocking work — batching it keeps the
-// popup responsive and avoids fitting a fresh model on a single noisy
-// correction.
+  isPersonalisationEnabled,
+  setPersonalisationEnabled,
+  ACTIVATION_THRESHOLD,
+} from '../ml/personalise.js';
 
 export default function App() {
   const [view, setView] = useState('idle');
@@ -51,14 +45,15 @@ export default function App() {
   const [error, setError] = useState(null);
 
   // Personalisation status, surfaced in the UI so the learning loop isn't
-  // invisible — people repeat an interaction more when they can see it's
-  // building toward something (a "3/15 examples" counter vs. silent logging).
+  // invisible. `sortMethod` says what the last sort actually used, so the UI
+  // can't claim personalisation that didn't happen.
   const [exampleCount, setExampleCount] = useState(0);
-  const [trainingStatus, setTrainingStatus] = useState('idle'); // idle | training | trained
-  const isTraining = useRef(false); // a drag can arrive while training is still running
+  const [personalising, setPersonalising] = useState(false);
+  const [sortMethod, setSortMethod] = useState('cosine');
 
   useEffect(() => {
     loadTrainingExamples().then(examples => setExampleCount(examples.length));
+    isPersonalisationEnabled().then(setPersonalising);
   }, []);
 
   // Load tabs on mount
@@ -80,13 +75,14 @@ export default function App() {
       const { tabs: tabData } = await chrome.runtime.sendMessage({ type: 'REQUEST_SORT' });
 
       // Run the ML pipeline (embeddings → graph → chain → clusters)
-      // This runs in the popup context where TF.js can access WebGL
+      // This runs in the popup, where the model has a page context to run in
       const result = await runMLPipeline(tabData, setProgress);
 
       setSortedChain(result.chain);
       setClusters(result.clusters);
       setClusterLabels(result.clusterLabels || {});
       setSimMatrix(result.simMatrix);
+      setSortMethod(result.method);
       setView('sorted');
 
       // The pipeline may have just drained the implicit tab-switch-burst
@@ -118,9 +114,9 @@ export default function App() {
    * The drag itself is the label: see feedback.js for how "before" vs.
    * "after" adjacency turns into (aId, bId, label) contrastive pairs.
    */
-  async function handleReorder(reordered) {
+  async function handleReorder(reordered, movedTabId) {
     const newChain = reannotateChain(reordered, simMatrix);
-    const pairs = deriveTrainingPairs(sortedChain, newChain);
+    const pairs = deriveTrainingPairs(sortedChain, newChain, movedTabId);
     setSortedChain(newChain); // update the UI immediately, don't block on storage
 
     if (pairs.length === 0) return;
@@ -142,37 +138,25 @@ export default function App() {
   }
 
   /**
-   * Retrains the personalisation model once enough examples exist, and again
-   * every RETRAIN_EVERY new examples after that. Runs in the background of
-   * the popup — doesn't block the UI, since the user has already moved on to
-   * looking at their (now-updated) chain.
-   *
-   * The decision compares the lifetime example count with its value at the last
-   * training run (stored as nn_trained_count) — see shouldRetrain in nn.js.
-   * Only one run at a time: examples that arrive during a run count towards the
-   * next one.
+   * Retrains once enough examples exist, and again every RETRAIN_EVERY new
+   * examples after that. Examples are collected either way, so turning
+   * personalisation on later has something to learn from. See shouldRetrain.
    */
   async function maybeRetrain() {
-    if (isTraining.current) return;
-    isTraining.current = true;
-    try {
-      const seen = await loadExamplesSeen();
-      const { nn_trained_count } = await chrome.storage.local.get('nn_trained_count');
-      if (!shouldRetrain(seen, nn_trained_count)) return;
+    if (!(await isPersonalisationEnabled())) return;
+    const seen = await loadExamplesSeen();
+    const { nn_trained_count } = await chrome.storage.local.get('nn_trained_count');
+    if (!shouldRetrain(seen, nn_trained_count)) return;
 
-      setTrainingStatus('training');
-      const examples = await loadTrainingExamples();
-      const model = (await loadSavedModel()) || (await buildModel());
-      await trainModel(examples, model, { epochs: 15 });
-      await saveModel(model);
-      await chrome.storage.local.set({ nn_trained_count: seen });
-      setTrainingStatus('trained');
-    } catch (err) {
-      console.error('[Threadline] Training failed:', err);
-      setTrainingStatus('idle');
-    } finally {
-      isTraining.current = false;
-    }
+    await saveAdjustments(trainAdjustments(await loadTrainingExamples()));
+    await chrome.storage.local.set({ nn_trained_count: seen });
+  }
+
+  async function handleTogglePersonalising(event) {
+    const enabled = event.target.checked;
+    setPersonalising(enabled);
+    await setPersonalisationEnabled(enabled);
+    maybeRetrain();
   }
 
   async function handleSnapshot() {
@@ -235,10 +219,18 @@ export default function App() {
         {view === 'sorted' && (
           <div className="sorted-view">
             <div className="chain-label">Your relatability chain</div>
-            <div className="chain-hint">Drag a tab to fix the order — Threadline learns from every correction</div>
+            <div className="chain-hint">
+              {personalising
+                ? 'Drag a tab to fix the order — Threadline learns from every correction'
+                : 'Drag a tab to fix the order'}
+            </div>
             <ClusterLegend clusterLabels={clusterLabels} />
             <TabChain chain={sortedChain} clusters={clusters} onReorder={handleReorder} />
-            <LearningStatus exampleCount={exampleCount} trainingStatus={trainingStatus} />
+            <label className="personalise-toggle">
+              <input type="checkbox" checked={personalising} onChange={handleTogglePersonalising} />
+              Personalise sorting (experimental)
+            </label>
+            {personalising && <LearningStatus exampleCount={exampleCount} sortMethod={sortMethod} />}
             <div className="action-row">
               <button className="apply-btn" onClick={handleApply}>
                 Apply Order
@@ -280,26 +272,19 @@ function ClusterLegend({ clusterLabels }) {
 }
 
 /**
- * Small status line under the chain. Makes the (otherwise invisible)
- * personalisation loop visible: how many corrections have been collected,
- * and whether personalised sorting is active yet.
+ * Small status line under the chain, shown when personalisation is on. It
+ * reports what the last sort actually did.
  */
-function LearningStatus({ exampleCount, trainingStatus }) {
-  if (trainingStatus === 'training') {
-    return <div className="learning-status">Learning from your corrections…</div>;
+function LearningStatus({ exampleCount, sortMethod }) {
+  if (sortMethod === 'personalised') {
+    return <div className="learning-status learning-status-active">✓ This sort used your corrections</div>;
   }
-
-  if (exampleCount >= NN_ACTIVATION_THRESHOLD) {
-    return <div className="learning-status learning-status-active">✓ Sorting personalised to you</div>;
+  if (exampleCount >= ACTIVATION_THRESHOLD) {
+    return <div className="learning-status">Your corrections will apply from the next sort</div>;
   }
-
-  if (exampleCount > 0) {
-    return (
-      <div className="learning-status">
-        {exampleCount}/{NN_ACTIVATION_THRESHOLD} training examples — drag more tabs to personalise sorting
-      </div>
-    );
-  }
-
-  return null;
+  return (
+    <div className="learning-status">
+      {exampleCount}/{ACTIVATION_THRESHOLD} training examples — drag tabs to teach Threadline
+    </div>
+  );
 }

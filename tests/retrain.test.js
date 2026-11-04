@@ -2,15 +2,15 @@
  * tests/retrain.test.js — when does the personalisation model train?
  *
  * Regression: App.jsx used to train only when the example count was EXACTLY
- * 15, 20, 25... A single drag adds 2-6 examples, so the count often jumped
+ * 15, 20, 25... A single drag adds 2-4 examples, so the count often jumped
  * past a checkpoint (13 -> 16) and training was skipped until it happened to
  * land on the next one.
  * Run with: node tests/retrain.test.js
  */
 import {
-  shouldRetrain, NN_ACTIVATION_THRESHOLD, RETRAIN_EVERY,
+  shouldRetrain, ACTIVATION_THRESHOLD, RETRAIN_EVERY,
   storeTrainingExample, loadTrainingExamples, loadExamplesSeen,
-} from '../src/ml/nn.js';
+} from '../src/ml/personalise.js';
 import { installChromeMock, makeRunner, assert } from './helpers/chromeMock.js';
 
 const { test, section, done } = makeRunner();
@@ -18,7 +18,7 @@ const { test, section, done } = makeRunner();
 section('shouldRetrain');
 
 test('defaults: activate at 15 examples, retrain every 5 new ones', () => {
-  assert(NN_ACTIVATION_THRESHOLD === 15, 'threshold');
+  assert(ACTIVATION_THRESHOLD === 15, 'threshold');
   assert(RETRAIN_EVERY === 5, 'cadence');
 });
 
@@ -61,7 +61,7 @@ test('simulated session: trains once per 5 new examples, whatever the step sizes
 
 section('the 200-example storage cap');
 
-const tab = { embedding: [0.1, 0.2], dwellMs: 0, revisitCount: 0, hourOfDay: 1, lastActive: 1 };
+const tab = { embedding: [0.1, 0.2] };
 
 test('keeps retraining after storage reaches the cap', async () => {
   installChromeMock();

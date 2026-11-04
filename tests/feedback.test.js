@@ -2,7 +2,7 @@
  * tests/feedback.test.js
  *
  * Tests for deriving contrastive training pairs from drag reorders.
- * Pure function, no TF.js or chrome.* APIs needed.
+ * Pure function, no model or chrome.* APIs needed.
  *
  * Run with: node tests/feedback.test.js
  */
@@ -37,6 +37,15 @@ function findPair(pairs, a, b) {
     (p.aId === a && p.bId === b) || (p.aId === b && p.bId === a)
   );
 }
+
+test('with the moved tab given, only pairs involving it are kept', () => {
+  const before = [1, 2, 3, 4, 5, 6].map(tabId => ({ tabId }));
+  const after = [1, 3, 4, 2, 5, 6].map(tabId => ({ tabId })); // tab 2 moved between 4 and 5
+  const pairs = deriveTrainingPairs(before, after, 2);
+  assert(pairs.length === 4, `expected 4 pairs, got ${pairs.length}`);
+  assert(pairs.every(p => p.aId === 2 || p.bId === 2), 'a pair without tab 2 got through');
+  assert(deriveTrainingPairs(before, after).length === 6, 'without the id, all changed pairs are returned');
+});
 
 console.log('\n── deriveTrainingPairs ──────────────────────────────────────');
 

@@ -1,0 +1,7 @@
+# Export needs older versions than training, so it gets its own environment.
+optimum[onnxruntime]==1.27.0
+transformers<4.54
+torch==2.5.1
+numpy<2.3
+onnx
+accelerate

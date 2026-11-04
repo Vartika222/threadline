@@ -2,7 +2,7 @@
  * THREADLINE — feedback.js
  *
  * Turns a user's manual drag-and-drop reorder into contrastive training
- * examples for the personalisation NN (see nn.js).
+ * examples for the optional personalisation (see personalise.js).
  *
  * ─── THE CORE IDEA ────────────────────────────────────────────────────────
  * The MST/DFS chain is Threadline's *hypothesis* about which tabs relate.
@@ -22,6 +22,10 @@
  *      Pairs adjacent before AND after aren't included. The user didn't
  *      act on them, so we can't tell agreement from apathy.
  *
+ * Given the dragged tab, only pairs it belongs to count. A drag also makes
+ * the tabs it left behind neighbours, and separates the two it landed between,
+ * but the user said nothing about those. Labelling them taught the model noise.
+ *
  * We deliberately only look at NEIGHBOUR pairs that changed, not every
  * pair whose relative position shifted because of the move. One drag is
  * weak evidence about one relationship — treating it as signal about
@@ -32,9 +36,10 @@
 /**
  * @param {Array<{tabId:number}>} beforeChain - chain order before the drag
  * @param {Array<{tabId:number}>} afterChain  - chain order after the drag
+ * @param {number} [movedTabId] - if given, keep only pairs involving this tab
  * @returns {Array<{aId:number, bId:number, label:0|1}>}
  */
-export function deriveTrainingPairs(beforeChain, afterChain) {
+export function deriveTrainingPairs(beforeChain, afterChain, movedTabId) {
   const adjacentPairs = (chain) => {
     const set = new Set();
     for (let i = 0; i < chain.length - 1; i++) {
@@ -55,7 +60,9 @@ export function deriveTrainingPairs(beforeChain, afterChain) {
     if (!after.has(key)) pairs.push({ ...unpackKey(key), label: 0 });
   }
 
-  return pairs;
+  return movedTabId === undefined
+    ? pairs
+    : pairs.filter(p => p.aId === movedTabId || p.bId === movedTabId);
 }
 
 function pairKey(a, b) {

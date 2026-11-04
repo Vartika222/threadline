@@ -79,7 +79,7 @@ Then:
 1. Open the popup
 2. Click **Sort by relatability**
 3. Watch the progress messages in the popup
-4. After about 15 seconds on the first run (USE model download), the sorted chain should appear
+4. After about 2 seconds, the sorted chain should appear
 5. Check that the React tabs are adjacent to each other and the food tabs are adjacent to each other
 
 If the sort produces a visually random order, check the popup's DevTools console — the embeddings may have failed to load and the pipeline may have thrown an error silently.
@@ -88,8 +88,8 @@ If the sort produces a visually random order, check the popup's DevTools console
 
 ## Common Problems
 
-### `Failed to load TensorFlow.js`
-USE requests its model from `tfhub.dev`, `www.kaggle.com` and `storage.googleapis.com` each time the popup first sorts (~25MB the first time, then mostly cached). This requires internet access every time and may fail on corporate or school networks. You'll see a network error in the popup console. (Bundling the weights locally is on the roadmap.)
+### `Could not load the language model`
+The model ships in the extension's `model/` folder, so this means the files are missing. Run `npm run build:verify` and load the `dist` folder (not the project root).
 
 ### `chrome is not defined` in popup
 This happens if the popup JS runs outside the extension context (e.g. if you open `popup.html` directly as a file). Always open the popup by clicking the extension icon.
@@ -98,7 +98,7 @@ This happens if the popup JS runs outside the extension context (e.g. if you ope
 MV3 service workers are not persistent — Chrome kills them after ~30 seconds of inactivity. This is expected. The extension is designed to re-initialise from `chrome.storage` on every event. If state is being lost, check that every handler reads from storage at the start (not from an in-memory variable).
 
 ### Sort takes forever
-The first sort is slow (about 15s with an empty cache) because USE downloads, and each new popup takes about 4s to load it again. Subsequent sorts in the same popup session are fast (~0.5s) because the model is cached in the module-level `_model` variable in `embedder.js`. If it's slow every time, the model cache isn't persisting — check that the popup isn't being destroyed between clicks.
+A new popup takes about 2 seconds because it loads the model from disk. Sorts in the same popup session take about 1 second because the model stays loaded, in the module-level `_extractor` variable in `embedder.js`.
 
 ---
 

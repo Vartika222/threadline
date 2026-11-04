@@ -16,12 +16,11 @@
  *
  * ─── WHY THIS IS QUEUED, NOT APPLIED IMMEDIATELY ─────────────────────────
  * background.js can observe WHICH tabIds get bounced between, but it can't
- * compute embeddings — Universal Sentence Encoder needs the popup's WebGL
- * context (see embedder.js), and the service worker doesn't have one.
+ * compute embeddings: the language model loads in the popup (see embedder.js).
  * So background.js queues candidate pairs by tabId in chrome.storage.
  * The next time the popup runs the ML pipeline — and therefore has fresh
  * embeddings for every open tab — we drain that queue here, turning tabId
- * pairs into full (embedding, behaviour, label) training examples.
+ * pairs into full (embedding, label) training examples.
  *
  * Candidates referencing tabs that have since closed (no matching tab in
  * the current pipeline run) are silently dropped — we can't train on a
@@ -38,7 +37,7 @@
  * source. Drag corrections (feedback.js) still provide the true negatives.
  */
 
-import { storeTrainingExample } from './nn.js';
+import { storeTrainingExample } from './personalise.js';
 import { cosineSimilarity } from './embedder.js';
 
 const CANDIDATES_KEY = 'implicit_training_candidates';
