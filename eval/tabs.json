@@ -1,0 +1,242 @@
+[
+ {
+  "group": "react-frontend",
+  "title": "React useEffect cleanup explained",
+  "content": "React useEffect cleanup explained. React useEffect cleanup explained. How to clean up subscriptions and timers inside useEffect hooks in React function components."
+ },
+ {
+  "group": "react-frontend",
+  "title": "useState vs useReducer \u2013 when to use which",
+  "content": "useState vs useReducer \u2013 when to use which. useState vs useReducer \u2013 when to use which. Comparing React state hooks for complex component state and predictable updates."
+ },
+ {
+  "group": "react-frontend",
+  "title": "Next.js App Router server components",
+  "content": "Next.js App Router server components. Next.js App Router server components. Server components, streaming and data fetching with the Next.js app directory."
+ },
+ {
+  "group": "react-frontend",
+  "title": "React performance: memo, useMemo, useCallback",
+  "content": "React performance: memo, useMemo, useCallback. React performance: memo, useMemo, useCallback. Avoid unnecessary re-renders in React with memoisation and profiling."
+ },
+ {
+  "group": "react-frontend",
+  "title": "Vite vs webpack for React projects",
+  "content": "Vite vs webpack for React projects. Vite vs webpack for React projects. Build tool comparison: dev server speed, HMR and bundle size for React apps."
+ },
+ {
+  "group": "react-frontend",
+  "title": "CSS Grid vs Flexbox for component layouts",
+  "content": "CSS Grid vs Flexbox for component layouts. CSS Grid vs Flexbox for component layouts. Choosing between grid and flexbox when laying out responsive React components."
+ },
+ {
+  "group": "python-data",
+  "title": "pandas groupby tutorial with examples",
+  "content": "pandas groupby tutorial with examples. pandas groupby tutorial with examples. Split-apply-combine in pandas: groupby, agg, transform and pivot tables."
+ },
+ {
+  "group": "python-data",
+  "title": "Cleaning messy CSV data in Python",
+  "content": "Cleaning messy CSV data in Python. Cleaning messy CSV data in Python. Handling missing values, duplicates and wrong dtypes with pandas before analysis."
+ },
+ {
+  "group": "python-data",
+  "title": "Matplotlib vs Seaborn vs Plotly",
+  "content": "Matplotlib vs Seaborn vs Plotly. Matplotlib vs Seaborn vs Plotly. Which Python plotting library to use for exploratory data analysis charts."
+ },
+ {
+  "group": "python-data",
+  "title": "SQL window functions for analysts",
+  "content": "SQL window functions for analysts. SQL window functions for analysts. ROW_NUMBER, RANK, LAG and running totals in SQL for analytics queries."
+ },
+ {
+  "group": "python-data",
+  "title": "A/B testing statistics: p-values and power",
+  "content": "A/B testing statistics: p-values and power. A/B testing statistics: p-values and power. Sample size, significance and common mistakes when analysing experiment data."
+ },
+ {
+  "group": "python-data",
+  "title": "Jupyter notebook best practices",
+  "content": "Jupyter notebook best practices. Jupyter notebook best practices. Keeping data analysis notebooks reproducible: environments, seeds and clean cells."
+ },
+ {
+  "group": "machine-learning",
+  "title": "Attention is all you need explained",
+  "content": "Attention is all you need explained. Attention is all you need explained. Walkthrough of the transformer architecture and self-attention mechanism."
+ },
+ {
+  "group": "machine-learning",
+  "title": "Fine-tuning LLMs with LoRA",
+  "content": "Fine-tuning LLMs with LoRA. Fine-tuning LLMs with LoRA. Parameter-efficient fine-tuning of large language models using low-rank adapters."
+ },
+ {
+  "group": "machine-learning",
+  "title": "Understanding the bias-variance tradeoff",
+  "content": "Understanding the bias-variance tradeoff. Understanding the bias-variance tradeoff. Why models underfit or overfit and how regularisation changes the balance."
+ },
+ {
+  "group": "machine-learning",
+  "title": "PyTorch DataLoader and training loop",
+  "content": "PyTorch DataLoader and training loop. PyTorch DataLoader and training loop. Writing a training loop in PyTorch with batching, optimisers and checkpoints."
+ },
+ {
+  "group": "machine-learning",
+  "title": "Sentence embeddings and semantic search",
+  "content": "Sentence embeddings and semantic search. Sentence embeddings and semantic search. How embedding models map text to vectors for retrieval and similarity."
+ },
+ {
+  "group": "machine-learning",
+  "title": "Evaluating classifiers: precision, recall, ROC",
+  "content": "Evaluating classifiers: precision, recall, ROC. Evaluating classifiers: precision, recall, ROC. Metrics for imbalanced classification and choosing a decision threshold."
+ },
+ {
+  "group": "cooking",
+  "title": "Authentic carbonara without cream",
+  "content": "Authentic carbonara without cream. Authentic carbonara without cream. Classic Roman pasta carbonara with guanciale, eggs and pecorino."
+ },
+ {
+  "group": "cooking",
+  "title": "How to make sourdough bread at home",
+  "content": "How to make sourdough bread at home. How to make sourdough bread at home. Starter feeding, folding, proofing and baking a crusty sourdough loaf."
+ },
+ {
+  "group": "cooking",
+  "title": "Weeknight chickpea curry recipe",
+  "content": "Weeknight chickpea curry recipe. Weeknight chickpea curry recipe. Easy vegetarian curry with coconut milk, spices and canned chickpeas."
+ },
+ {
+  "group": "cooking",
+  "title": "Knife skills every home cook needs",
+  "content": "Knife skills every home cook needs. Knife skills every home cook needs. Dicing onions, julienne and keeping kitchen knives sharp and safe."
+ },
+ {
+  "group": "cooking",
+  "title": "Best cast iron skillet recipes",
+  "content": "Best cast iron skillet recipes. Best cast iron skillet recipes. Searing steak, cornbread and roast vegetables in a cast iron pan."
+ },
+ {
+  "group": "cooking",
+  "title": "Meal prep ideas for a busy week",
+  "content": "Meal prep ideas for a busy week. Meal prep ideas for a busy week. Batch cooking grains, proteins and sauces for quick lunches and dinners."
+ },
+ {
+  "group": "japan-travel",
+  "title": "Two week Japan itinerary Tokyo to Kyoto",
+  "content": "Two week Japan itinerary Tokyo to Kyoto. Two week Japan itinerary Tokyo to Kyoto. Day by day route covering Tokyo, Hakone, Kyoto, Nara and Osaka."
+ },
+ {
+  "group": "japan-travel",
+  "title": "Japan Rail Pass worth it? Cost breakdown",
+  "content": "Japan Rail Pass worth it? Cost breakdown. Japan Rail Pass worth it? Cost breakdown. Comparing the JR pass with individual shinkansen tickets for tourists."
+ },
+ {
+  "group": "japan-travel",
+  "title": "Best ramen shops in Shinjuku",
+  "content": "Best ramen shops in Shinjuku. Best ramen shops in Shinjuku. Where to eat tonkotsu and shoyu ramen near Shinjuku station in Tokyo."
+ },
+ {
+  "group": "japan-travel",
+  "title": "Kyoto temples and shrines guide",
+  "content": "Kyoto temples and shrines guide. Kyoto temples and shrines guide. Fushimi Inari, Kinkaku-ji and quiet temples away from tourist crowds."
+ },
+ {
+  "group": "japan-travel",
+  "title": "Japan travel etiquette for first-time visitors",
+  "content": "Japan travel etiquette for first-time visitors. Japan travel etiquette for first-time visitors. Onsen rules, tipping, trains and polite behaviour in Japan."
+ },
+ {
+  "group": "japan-travel",
+  "title": "Cherry blossom season forecast and best spots",
+  "content": "Cherry blossom season forecast and best spots. Cherry blossom season forecast and best spots. When sakura bloom in Tokyo, Kyoto and Osaka and where to see hanami."
+ },
+ {
+  "group": "personal-finance",
+  "title": "Index funds vs actively managed mutual funds",
+  "content": "Index funds vs actively managed mutual funds. Index funds vs actively managed mutual funds. Costs, expense ratios and long term performance of passive versus active funds."
+ },
+ {
+  "group": "personal-finance",
+  "title": "How SIP investing works in India",
+  "content": "How SIP investing works in India. How SIP investing works in India. Systematic investment plans, rupee cost averaging and choosing a fund category."
+ },
+ {
+  "group": "personal-finance",
+  "title": "Emergency fund: how much do you need",
+  "content": "Emergency fund: how much do you need. Emergency fund: how much do you need. Months of expenses to save and where to keep an emergency fund."
+ },
+ {
+  "group": "personal-finance",
+  "title": "Understanding compound interest",
+  "content": "Understanding compound interest. Understanding compound interest. How compounding grows savings over decades with worked examples."
+ },
+ {
+  "group": "personal-finance",
+  "title": "Old vs new tax regime comparison",
+  "content": "Old vs new tax regime comparison. Old vs new tax regime comparison. Deductions and slab rates to decide which income tax regime saves more."
+ },
+ {
+  "group": "personal-finance",
+  "title": "Credit score basics and how to improve it",
+  "content": "Credit score basics and how to improve it. Credit score basics and how to improve it. What affects a credit score and steps to raise it over time."
+ },
+ {
+  "group": "fitness-running",
+  "title": "Couch to 5K training plan",
+  "content": "Couch to 5K training plan. Couch to 5K training plan. Nine week programme alternating walking and running for beginners."
+ },
+ {
+  "group": "fitness-running",
+  "title": "Marathon training: long run pacing",
+  "content": "Marathon training: long run pacing. Marathon training: long run pacing. How to build weekly mileage and pace long runs without injury."
+ },
+ {
+  "group": "fitness-running",
+  "title": "Strength training for runners",
+  "content": "Strength training for runners. Strength training for runners. Squats, lunges and core exercises that improve running economy."
+ },
+ {
+  "group": "fitness-running",
+  "title": "Fixing shin splints and common running injuries",
+  "content": "Fixing shin splints and common running injuries. Fixing shin splints and common running injuries. Causes of shin splints, rest, footwear and gradual return to running."
+ },
+ {
+  "group": "fitness-running",
+  "title": "Best running shoes for beginners",
+  "content": "Best running shoes for beginners. Best running shoes for beginners. Cushioning, stability and fit when choosing your first pair of running shoes."
+ },
+ {
+  "group": "fitness-running",
+  "title": "Heart rate zones explained",
+  "content": "Heart rate zones explained. Heart rate zones explained. Using zone 2 training and heart rate data to structure running workouts."
+ },
+ {
+  "group": "chrome-extension-dev",
+  "title": "Chrome extension Manifest V3 migration guide",
+  "content": "Chrome extension Manifest V3 migration guide. Chrome extension Manifest V3 migration guide. Service workers, host permissions and declarativeNetRequest in Manifest V3."
+ },
+ {
+  "group": "chrome-extension-dev",
+  "title": "chrome.storage API reference",
+  "content": "chrome.storage API reference. chrome.storage API reference. Using chrome.storage.local and sync to persist extension data."
+ },
+ {
+  "group": "chrome-extension-dev",
+  "title": "Content scripts vs background scripts",
+  "content": "Content scripts vs background scripts. Content scripts vs background scripts. How extension content scripts, popups and service workers communicate."
+ },
+ {
+  "group": "chrome-extension-dev",
+  "title": "Publishing to the Chrome Web Store",
+  "content": "Publishing to the Chrome Web Store. Publishing to the Chrome Web Store. Developer account, review process, privacy policy and store listing requirements."
+ },
+ {
+  "group": "chrome-extension-dev",
+  "title": "Debugging a Manifest V3 service worker",
+  "content": "Debugging a Manifest V3 service worker. Debugging a Manifest V3 service worker. Inspecting service worker logs and handling the worker being terminated."
+ },
+ {
+  "group": "chrome-extension-dev",
+  "title": "Chrome tabs API: query, move and group tabs",
+  "content": "Chrome tabs API: query, move and group tabs. Chrome tabs API: query, move and group tabs. Using chrome.tabs and chrome.tabGroups to manage browser tabs."
+ }
+]

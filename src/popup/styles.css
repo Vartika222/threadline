@@ -292,6 +292,83 @@ body {
   color: var(--text-muted);
 }
 
+/* ── DRAG TO REORDER ──────────────────────────────── */
+
+.chain-card { cursor: grab; }
+
+.chain-card-dragging {
+  opacity: 0.4;
+  cursor: grabbing;
+}
+
+.chain-card-drop-target {
+  border-color: var(--accent-light);
+  box-shadow: 0 0 0 2px var(--accent-glow);
+}
+
+.chain-hint {
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-top: -4px;
+}
+
+/* ── LEARNING STATUS ──────────────────────────────── */
+
+.learning-status {
+  font-size: 10px;
+  color: var(--text-secondary);
+  padding: 6px 10px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.learning-status-active {
+  color: var(--success);
+  border-color: rgba(16, 185, 129, 0.3);
+  background: rgba(16, 185, 129, 0.08);
+}
+
+/* ── CLUSTER LEGEND ───────────────────────────────── */
+
+.cluster-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.cluster-chip {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 10px;
+  color: var(--text-secondary);
+}
+
+.cluster-chip-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+/* ── STALE BADGE ──────────────────────────────────── */
+
+.chain-stale-badge {
+  font-size: 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 1px 5px;
+  margin-top: 2px;
+}
+
 /* ── SORT BUTTON ──────────────────────────────────── */
 
 .sort-btn {

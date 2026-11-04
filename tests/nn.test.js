@@ -41,16 +41,17 @@ console.log('\n── tabToBehaviourVector ────────────�
 
 test('returns 5-element array', () => {
   const vec = tabToBehaviourVector({ dwellMs: 1000, revisitCount: 2, hourOfDay: 14 });
-  assert(vec.length === 5, `Expected 5 elements, got ${vec.length}`);
+  assert(vec.length === 6, `Expected 6 elements (5 original + recencyNorm), got ${vec.length}`);
 });
 
 test('all values are in [0, 1] or [-1, 1] for cyclical', () => {
-  const vec = tabToBehaviourVector({ dwellMs: 5000, revisitCount: 5, hourOfDay: 9 });
+  const vec = tabToBehaviourVector({ dwellMs: 5000, revisitCount: 5, hourOfDay: 9, lastActive: Date.now() });
   assertInRange(vec[0], 0, 1, 'dwell_norm');
   assertInRange(vec[1], 0, 1, 'revisit_norm');
   assertInRange(vec[2], -1, 1, 'hour_sin');
   assertInRange(vec[3], -1, 1, 'hour_cos');
   assertInRange(vec[4], 0, 1, 'transition_norm');
+  assertInRange(vec[5], 0, 1, 'recency_norm');
 });
 
 test('zero-dwell tab produces zero dwell_norm', () => {
@@ -92,8 +93,33 @@ test('noon and midnight have different hour encodings', () => {
 test('handles missing fields gracefully', () => {
   // Should not throw, should return sensible defaults
   const vec = tabToBehaviourVector({});
-  assert(vec.length === 5);
+  assert(vec.length === 6);
   assert(vec.every(v => isFinite(v)), 'All values should be finite');
+});
+
+console.log('\n── recencyNorm (via tabToBehaviourVector) ───────────────────');
+
+test('returns 6-element array including recencyNorm', () => {
+  const vec = tabToBehaviourVector({ lastActive: Date.now() });
+  assert(vec.length === 6, `Expected 6 elements, got ${vec.length}`);
+});
+
+test('a tab active right now scores recencyNorm close to 1', () => {
+  const now = 1_000_000_000_000;
+  const vec = tabToBehaviourVector({ lastActive: now }, now);
+  assertClose(vec[5], 1.0);
+});
+
+test('a tab untouched for 30+ minutes scores recencyNorm at 0', () => {
+  const now = 1_000_000_000_000;
+  const fortyMinutesAgo = now - 40 * 60 * 1000;
+  const vec = tabToBehaviourVector({ lastActive: fortyMinutesAgo }, now);
+  assertClose(vec[5], 0);
+});
+
+test('a tab with no lastActive recorded is treated as fully stale', () => {
+  const vec = tabToBehaviourVector({});
+  assertClose(vec[5], 0);
 });
 
 console.log('\n─────────────────────────────────────────────────────────────');

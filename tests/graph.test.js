@@ -12,6 +12,7 @@ import {
   buildMST,
   traverseMST,
   annotateChain,
+  reannotateChain,
 } from '../src/ml/graph.js';
 
 // ─── Mock cosine similarity (no TF.js needed) ────────────────────────────
@@ -200,6 +201,24 @@ test('annotates similarity to next correctly', () => {
   const chain = annotateChain([0, 1], matrix);
   assertClose(chain[0].similarityToNext, 0.7);
   assert(chain[1].similarityToNext === null, 'Last item should have null similarityToNext');
+});
+
+console.log('\n── reannotateChain ──────────────────────────────────────────');
+
+test('after a reorder, each tab reports similarity to its new neighbour', () => {
+  const matrix = [[1, 0.9, 0.2], [0.9, 1, 0.5], [0.2, 0.5, 1]];
+  const chain = [{ originalIndex: 0 }, { originalIndex: 1 }, { originalIndex: 2 }];
+  const moved = reannotateChain([chain[1], chain[0], chain[2]], matrix);
+  assertClose(moved[0].similarityToNext, 0.9);
+  assertClose(moved[1].similarityToNext, 0.2);
+  assert(moved[2].similarityToNext === null, 'Last item should have null similarityToNext');
+});
+
+test('reannotateChain keeps the other tab fields and does not mutate its input', () => {
+  const tab = { originalIndex: 0, title: 'A', similarityToNext: 0.1 };
+  const out = reannotateChain([tab, { originalIndex: 1 }], [[1, 0.4], [0.4, 1]]);
+  assert(out[0].title === 'A', 'title kept');
+  assert(tab.similarityToNext === 0.1, 'input left alone');
 });
 
 // ─── Summary ──────────────────────────────────────────────────────────────

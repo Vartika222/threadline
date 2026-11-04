@@ -1,4 +1,4 @@
-# Loading Threadline in Chrome — V2 Guide
+# Loading Threadline in Chrome
 
 ## Step 1: Build
 
@@ -12,7 +12,7 @@ Expected output ends with:
 ✓  dist/ is ready to load in Chrome
 ```
 
-If you see errors, fix them before continuing. The most common: missing icons (run `node scripts/generate-icons.js` if they're not there).
+If you see errors, fix them before continuing. The most common is a missing `icons/` folder — it must contain icon16.png, icon48.png and icon128.png.
 
 ---
 
@@ -79,7 +79,7 @@ Then:
 1. Open the popup
 2. Click **Sort by relatability**
 3. Watch the progress messages in the popup
-4. After ~3-5 seconds (USE model loading on first run), the sorted chain should appear
+4. After about 15 seconds on the first run (USE model download), the sorted chain should appear
 5. Check that the React tabs are adjacent to each other and the food tabs are adjacent to each other
 
 If the sort produces a visually random order, check the popup's DevTools console — the embeddings may have failed to load and the pipeline may have thrown an error silently.
@@ -89,7 +89,7 @@ If the sort produces a visually random order, check the popup's DevTools console
 ## Common Problems
 
 ### `Failed to load TensorFlow.js`
-USE loads its model weights from a CDN on first use (~25MB download). This requires internet access and may fail on corporate networks. You'll see a network error in the popup console. Fix for V3: bundle the model weights locally.
+USE requests its model from `tfhub.dev`, `www.kaggle.com` and `storage.googleapis.com` each time the popup first sorts (~25MB the first time, then mostly cached). This requires internet access every time and may fail on corporate or school networks. You'll see a network error in the popup console. (Bundling the weights locally is on the roadmap.)
 
 ### `chrome is not defined` in popup
 This happens if the popup JS runs outside the extension context (e.g. if you open `popup.html` directly as a file). Always open the popup by clicking the extension icon.
@@ -98,11 +98,11 @@ This happens if the popup JS runs outside the extension context (e.g. if you ope
 MV3 service workers are not persistent — Chrome kills them after ~30 seconds of inactivity. This is expected. The extension is designed to re-initialise from `chrome.storage` on every event. If state is being lost, check that every handler reads from storage at the start (not from an in-memory variable).
 
 ### Sort takes forever
-First sort is slow (~3-5s) because USE loads. Subsequent sorts in the same popup session are fast (~0.5s) because the model is cached in the module-level `_model` variable in `embedder.js`. If it's slow every time, the model cache isn't persisting — check that the popup isn't being destroyed between clicks.
+The first sort is slow (about 15s with an empty cache) because USE downloads, and each new popup takes about 4s to load it again. Subsequent sorts in the same popup session are fast (~0.5s) because the model is cached in the module-level `_model` variable in `embedder.js`. If it's slow every time, the model cache isn't persisting — check that the popup isn't being destroyed between clicks.
 
 ---
 
-## What to check before calling V2 done
+## Checklist
 
 - [ ] `npm run build:verify` exits 0
 - [ ] Extension loads in chrome://extensions without red errors
