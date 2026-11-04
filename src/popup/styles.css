@@ -329,6 +329,15 @@ body {
   background: rgba(16, 185, 129, 0.08);
 }
 
+.personalise-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
 /* ── CLUSTER LEGEND ───────────────────────────────── */
 
 .cluster-legend {

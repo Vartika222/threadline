@@ -5,7 +5,7 @@
  */
 import { installChromeMock, makeRunner, assert } from './helpers/chromeMock.js';
 import { consumeImplicitPairs, pickLeastSimilar } from '../src/ml/implicitFeedback.js';
-import { storeTrainingExample, roundVector, loadTrainingExamples } from '../src/ml/nn.js';
+import { storeTrainingExample, roundVector, loadTrainingExamples } from '../src/ml/personalise.js';
 
 const { test, section, done } = makeRunner();
 

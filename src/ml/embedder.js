@@ -1,87 +1,93 @@
 /**
  * THREADLINE — embedder.js
  *
- * Loads Universal Sentence Encoder (USE) via TensorFlow.js and converts
- * an array of text strings into 512-dimensional embedding vectors.
+ * Runs all-MiniLM-L6-v2, a pretrained sentence-embedding neural network (a small
+ * BERT-style transformer), and converts text into 384-dimensional vectors.
  *
- * WHY USE?
- *   - Trained on a huge corpus of text to map similar meanings to nearby vectors
- *   - 512 dimensions is enough signal for tab content without being too heavy
- *   - Runs fully in-browser via WebGL — no data leaves the device
- *   - Small enough (≈25MB) to load in an extension popup context
+ * WHY THIS MODEL?
+ *   - It replaced Universal Sentence Encoder because it tells close topics apart
+ *     far better. See the README's Evaluation section.
+ *   - The 23MB quantised version ships inside the extension (public/model/), so
+ *     it works offline and no tab text leaves the device.
+ *   - It runs through Transformers.js and ONNX Runtime on WebAssembly.
  *
  * HOW EMBEDDINGS WORK:
- *   Think of each 512-dim vector as a point in 512-dimensional space.
- *   "React hooks tutorial" and "useState useEffect guide" will be
- *   near each other. "French cooking recipes" will be far away from both.
- *   We exploit this geometry to measure tab relatability.
+ *   Think of each vector as a point in 384-dimensional space. "React hooks
+ *   tutorial" and "useState useEffect guide" land near each other, and "French
+ *   cooking recipes" lands far from both. We exploit this geometry to measure
+ *   how related two tabs are.
  *
  * USAGE:
  *   import { embedTexts, cosineSimilarity } from './embedder.js';
  *   const vecs = await embedTexts(['React hooks', 'Vue composition API']);
- *   const sim  = cosineSimilarity(vecs[0], vecs[1]); // e.g. 0.82
+ *   const sim  = cosineSimilarity(vecs[0], vecs[1]);
  */
 
-// Module-level cache so we only load the model once per popup session.
-// Measured on an M4 Mac: about 15s with an empty browser cache, about 4s for
-// each new popup after that, then under 0.5s for repeat sorts in the same popup.
-let _model = null;
+const MODEL_NAME = 'all-MiniLM-L6-v2';
 
-/**
- * Loads the USE model. Subsequent calls return the cached instance.
- * @returns {Promise<object>} The loaded USE model
- */
+// Loaded once per popup session.
+let _extractor = null;
+
+// Where the model folder lives. Inside the extension that's its own files, so
+// nothing is downloaded. Scripts running in Node supply a folder path instead.
+let _modelRoot = null;
+
+/** @param {string} path - folder holding the all-MiniLM-L6-v2 folder, ending in "/" */
+export function setModelRoot(path) {
+  _modelRoot = path;
+}
+
 async function loadModel() {
-  if (_model) return _model;
+  if (_extractor) return _extractor;
 
-  // Dynamic import — TF.js is large, so we load it lazily
-  // In a Chrome extension, @tensorflow-models/universal-sentence-encoder
-  // fetches the model weights from its own CDN on first use.
-  // For production, you'd want to bundle the weights locally.
-  const use = await import('@tensorflow-models/universal-sentence-encoder');
-  await import('@tensorflow/tfjs');
+  // Dynamic import — it's large, so we load it lazily
+  const { pipeline, env } = await import('@huggingface/transformers');
+
+  const extensionUrl = globalThis.chrome?.runtime?.getURL;
+  env.allowRemoteModels = false; // never fetch a model from the internet
+  env.allowLocalModels = true;
+  env.useBrowserCache = false;
+  env.useFSCache = false;
+  env.localModelPath = _modelRoot ?? extensionUrl('model/');
+
+  const options = { dtype: 'q8' };
+  if (!_modelRoot) {
+    // Use the WebAssembly files we ship, not the default CDN copy. One thread,
+    // because multi-threaded WebAssembly isn't available to extension popups.
+    env.backends.onnx.wasm.wasmPaths = extensionUrl('ort/');
+    env.backends.onnx.wasm.numThreads = 1;
+    options.device = 'wasm';
+  }
 
   try {
-    _model = await use.load();
+    _extractor = await pipeline('feature-extraction', MODEL_NAME, options);
   } catch (err) {
-    // The browser's own message ("Failed to fetch") doesn't say what to do.
+    console.error('[Threadline] Could not load the model:', err);
     throw new Error(
-      'Could not load the language model. Threadline downloads it from the internet ' +
-      'each time the popup opens (about 25MB the first time, then mostly cached). ' +
-      'Check your connection and try again.'
+      'Could not load the language model that ships with Threadline. ' +
+      'Try reinstalling the extension.'
     );
   }
-  return _model;
+  return _extractor;
 }
 
 /**
- * Embeds an array of text strings into 512-dimensional vectors.
+ * Embeds an array of text strings into unit-length vectors.
  *
  * @param {string[]} texts - Array of strings to embed (tab titles/content)
  * @param {Function} [onProgress] - Optional progress callback
- * @returns {Promise<number[][]>} Array of 512-dim vectors (one per input string)
+ * @returns {Promise<number[][]>} One vector per input string
  */
 export async function embedTexts(texts, onProgress) {
   if (!texts || texts.length === 0) return [];
 
   if (onProgress) onProgress('Loading language model...');
-
-  const model = await loadModel();
+  const extractor = await loadModel();
 
   if (onProgress) onProgress(`Embedding ${texts.length} tabs...`);
-
-  // USE expects an array of strings.
-  // model.embed() returns a 2D tensor of shape [texts.length, 512]
-  const embeddingTensor = await model.embed(texts);
-
-  // .array() converts the tensor to a regular JS array of arrays.
-  // Each inner array is 512 numbers — the embedding vector.
-  const embeddings = await embeddingTensor.array();
-
-  // Always dispose tensors you're done with to free GPU memory.
-  // Forgetting this causes memory leaks in long-running popups.
-  embeddingTensor.dispose();
-
+  const output = await extractor(texts, { pooling: 'mean', normalize: true });
+  const embeddings = output.tolist();
+  output.dispose?.();
   return embeddings;
 }
 
@@ -98,8 +104,8 @@ export async function embedTexts(texts, onProgress) {
  *   have similar directions but different magnitudes. Cosine handles
  *   this correctly; Euclidean would score them as dissimilar.
  *
- * @param {number[]} a - First 512-dim vector
- * @param {number[]} b - Second 512-dim vector
+ * @param {number[]} a - First vector
+ * @param {number[]} b - Second vector
  * @returns {number} Similarity score between -1 and 1 (typically 0.1–0.9 for tabs)
  */
 export function cosineSimilarity(a, b) {
@@ -119,28 +125,4 @@ export function cosineSimilarity(a, b) {
   if (denom === 0) return 0; // Guard against zero vectors
 
   return dot / denom;
-}
-
-/**
- * Quick self-test — run this in Node to verify the embedder works.
- * Expected: similarity(texts[0], texts[1]) > similarity(texts[0], texts[2])
- *
- * To run: node --experimental-vm-modules src/ml/embedder.test.js
- */
-export async function selfTest() {
-  const texts = [
-    'React hooks and component lifecycle',
-    'useState useEffect JavaScript framework',
-    'French cooking recipes pasta carbonara',
-  ];
-
-  console.log('Loading USE model...');
-  const vecs = await embedTexts(texts);
-
-  const sim01 = cosineSimilarity(vecs[0], vecs[1]);
-  const sim02 = cosineSimilarity(vecs[0], vecs[2]);
-
-  console.log(`[0] vs [1] (should be HIGH): ${sim01.toFixed(4)}`);
-  console.log(`[0] vs [2] (should be LOW):  ${sim02.toFixed(4)}`);
-  console.log(`Test ${sim01 > sim02 ? 'PASSED ✓' : 'FAILED ✗'}`);
 }

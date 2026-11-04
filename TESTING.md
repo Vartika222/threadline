@@ -8,7 +8,7 @@ Takes about 20 minutes. You need **Node 18 or newer** and **Google Chrome**
 ```bash
 cd threadline
 npm install
-npm test               # expect: every file prints "N passed, 0 failed" (142 tests in total)
+npm test               # expect: every file prints "N passed, 0 failed" (all tests passing)
 npm run build:verify   # expect the last line: "✓  dist/ is ready to load in Chrome"
 ```
 
@@ -55,21 +55,17 @@ Open these nine tabs **in this mixed-up order** (so there is real work to do):
 
 Then click the Threadline icon and press **Sort by relatability**.
 
-**Needs internet every time the popup is opened:** it requests the language model
-(~25MB the first time, then mostly from the browser cache). Expect about 15
-seconds with an empty cache, about 4 seconds for each new popup, and under a
-second for another sort in the same popup (measured on an M4 Mac). With no
-connection you should see the message "Could not load the language model…"
-instead of a crash.
+**Works without internet:** the language model ships with the extension. Expect
+about 2 seconds for the sort in a new popup, and about 1 second for another sort in
+the same popup (measured on an M4 Mac). To check, turn off your Wi-Fi and sort.
 
 Expected result:
 - A chain where the three React tabs sit together, the three food tabs together
   and the three Japan tabs together (the order of the groups can vary).
-- Two or three colours, with a legend of names (the most distinctive words in
-  each group). Grouping tends to find too few topics: in a test run food and
-  Japan shared one colour, with the legend "React & Useeffect" / "Wikipedia &
-  Contents". Sorting the same tabs again gives the same colours and names, even
-  after their order changes.
+- Usually three or four colours, with a legend of names (the most distinctive
+  words in each group). In a test run: "React & Useeffect", "Sourdough & Carbonara",
+  "Tokyo & Kyoto", and Shinkansen alone in its own group. Sorting the same tabs
+  again gives the same result, even after their order changes.
 - Press **Apply Order** and check Chrome's tab strip rearranges to match.
 
 Note down: did the three groups come out contiguous? How many seconds did the
@@ -77,19 +73,23 @@ first sort take, and the second?
 
 ## 5. Test the learning loop
 
-1. Sort again, then **drag** a card to a new position in the popup list.
-2. Under the chain, a counter appears: `n/15 training examples`. Each drag
-   usually adds 4 to 6 examples (2 if it moves a tab from one end to the other),
-   counting the pairs you created and the pairs you broke.
-3. Keep dragging until it reaches 15. Expected: the message changes to
-   "Learning from your corrections…" and then "✓ Sorting personalised to you".
-4. In the service worker console (step 3), confirm a trained model was saved:
+1. Sort again, tick **Personalise sorting (experimental)** under the chain, then
+   **drag** a card to a new position.
+2. A counter appears: `n/15 training examples`. Each drag usually adds 2 to 4
+   examples (the pairs the dragged tab joined and left).
+3. Keep dragging until it reaches 15. Expected: the message changes to "Your
+   corrections will apply from the next sort".
+4. In the service worker console (step 3), confirm the weights were saved:
 
 ```js
-chrome.storage.local.get(['nn_weights','nn_version','nn_saved_at'], d => console.log(!!d.nn_weights, d.nn_version, new Date(d.nn_saved_at)))
+chrome.storage.local.get(['personal_weights','nn_trained_count'], d => console.log(!!d.personal_weights, d.nn_trained_count))
 ```
 
-Expected: `true 3 <recent date>`.
+Expected: `true` and a number of 15 or more.
+
+5. Close and reopen the popup, then sort. Expected: "✓ This sort used your
+   corrections". Untick the box and sort again in a new popup, and the order and
+   percentages go back to plain cosine.
 
 ## 6. Test tab-switch learning (no dragging)
 
@@ -118,15 +118,13 @@ chrome.storage.local.get('implicit_training_candidates', d => console.log(d))
 ## 8. Measure it (the part for your resume)
 
 ```bash
-npm run eval:use
+npm run eval:model
 ```
 
-This downloads the same model in Node, scores Threadline's chain against a
-greedy and a random ordering on 48 labelled tabs, and writes the table to
-`eval/results-use.md`. Compare it with the table in the README's "Evaluation"
+This runs the bundled model in Node, scores Threadline's chain against MST,
+greedy and random orderings on 48 labelled tabs, and writes the table to
+`eval/results-minilm.md`. Compare it with the table in the README's "Evaluation"
 section.
-If the Node run cannot download the model on your network, run the offline
-version (`npm run eval`) just to check the harness, and tell me.
 
 ## What to send back if something fails
 

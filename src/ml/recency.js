@@ -2,13 +2,7 @@
  * THREADLINE — recency.js
  *
  * Shared "how long since this tab was last touched" calculation.
- * Used in TWO places that need to agree with each other:
- *   1. nn.js's behaviour vector (recencyNorm — a real input feature the NN
- *      trains on)
- *   2. The UI's visual decay (fading stale tabs so the user notices them)
- *
- * Keeping one function means the number the model learns from and the
- * number the user sees on screen are always the same thing.
+ * Used for the UI's visual decay: fading stale tabs so the user notices them.
  *
  * ─── THE PSYCHOLOGY (Zeigarnik effect) ───────────────────────────────────
  * The Zeigarnik effect describes how unfinished tasks stay mentally

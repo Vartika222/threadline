@@ -3,8 +3,8 @@
  *
  * Three things happen here, in order:
  *   1. Build an N×N similarity matrix from embedding vectors
- *   2. Find the Maximum Spanning Tree (Kruskal's algorithm + Union-Find)
- *   3. Traverse the MST with DFS to produce the final tab order
+ *   2. Build two candidate chains: MST + DFS, and the best greedy walk
+ *   3. Polish both with local search and keep the stronger chain
  *
  * ─── WHY A GRAPH? ────────────────────────────────────────────────────────
  *
@@ -13,10 +13,11 @@
  * of all tab relationships at once, finding the strongest set of connections
  * that keeps all tabs reachable.
  *
- * MEASURED: on eval/tabs.json with the real model, greedy actually scores
- * slightly HIGHER than MST + DFS on neighbour agreement (0.595 vs 0.543 at 30
- * tabs), because a DFS jumps back up the tree when it finishes a branch. See
- * the Evaluation section of the README.
+ * Neither wins alone. Greedy tends to strand a few tabs for the end of the
+ * walk, and a DFS jumps back up the tree when it finishes a branch. So
+ * buildChainOrder repairs both with local search and keeps whichever chain has
+ * the higher total similarity between neighbours. That choice uses no topic
+ * labels, so it works on any tabs. See the README's Evaluation section.
  *
  * ─── KRUSKAL'S ALGORITHM ─────────────────────────────────────────────────
  *
@@ -45,7 +46,7 @@
 /**
  * Computes pairwise cosine similarity for all embedding vectors.
  *
- * @param {number[][]} embeddings - Array of 512-dim vectors
+ * @param {number[][]} embeddings - One vector per tab
  * @param {Function} cosineSim - The cosineSimilarity function from embedder.js
  * @returns {number[][]} N×N symmetric matrix, matrix[i][j] = sim(tab_i, tab_j)
  */
@@ -231,6 +232,126 @@ export function traverseMST(mst, n) {
   }
 
   return order;
+}
+
+// ─── THE FINAL CHAIN ──────────────────────────────────────────────────────
+
+/** Total similarity between neighbours: the number a good chain maximises. */
+export function chainSimilarity(order, simMatrix) {
+  let total = 0;
+  for (let i = 0; i < order.length - 1; i++) total += simMatrix[order[i]][order[i + 1]];
+  return total;
+}
+
+/** Walks from `start`, always going to the most similar unvisited tab. */
+function greedyChainFrom(start, simMatrix) {
+  const n = simMatrix.length;
+  const visited = new Array(n).fill(false);
+  const order = [start];
+  visited[start] = true;
+  while (order.length < n) {
+    const last = order[order.length - 1];
+    let next = -1;
+    let nextSim = -Infinity;
+    for (let j = 0; j < n; j++) {
+      if (!visited[j] && simMatrix[last][j] > nextSim) { nextSim = simMatrix[last][j]; next = j; }
+    }
+    visited[next] = true;
+    order.push(next);
+  }
+  return order;
+}
+
+/** Tries a greedy walk from every tab and keeps the strongest. */
+export function bestGreedyOrder(simMatrix) {
+  let best = [];
+  let bestTotal = -Infinity;
+  for (let start = 0; start < simMatrix.length; start++) {
+    const order = greedyChainFrom(start, simMatrix);
+    const total = chainSimilarity(order, simMatrix);
+    if (total > bestTotal) { bestTotal = total; best = order; }
+  }
+  return best;
+}
+
+/**
+ * Local search: keeps making small changes that raise the chain's total
+ * similarity, until none is left.
+ *   - Reverse a stretch of the chain (2-opt), which undoes crossed connections.
+ *   - Move a run of 1 to 3 tabs elsewhere (or-opt), which rescues stranded tabs.
+ *
+ * Every accepted change strictly raises the total, so this always finishes.
+ */
+export function improveChain(startOrder, simMatrix) {
+  const order = [...startOrder];
+  const n = order.length;
+  const MIN_GAIN = 1e-9; // ignore floating-point noise
+  // A chain has open ends, so a missing neighbour contributes nothing.
+  const sim = (a, b) => (a === undefined || b === undefined ? 0 : simMatrix[a][b]);
+
+  let improved = true;
+  while (improved) {
+    improved = false;
+
+    for (let i = 0; i < n - 1; i++) {
+      for (let j = i + 1; j < n; j++) {
+        const gain = sim(order[i - 1], order[j]) + sim(order[i], order[j + 1])
+          - sim(order[i - 1], order[i]) - sim(order[j], order[j + 1]);
+        if (gain > MIN_GAIN) {
+          for (let a = i, b = j; a < b; a++, b--) [order[a], order[b]] = [order[b], order[a]];
+          improved = true;
+        }
+      }
+    }
+
+    for (let length = 1; length <= 3; length++) {
+      for (let i = 0; i + length <= n; i++) {
+        const run = order.slice(i, i + length);
+        const rest = [...order.slice(0, i), ...order.slice(i + length)];
+        const removalGain = sim(order[i - 1], order[i + length])
+          - sim(order[i - 1], run[0]) - sim(run[length - 1], order[i + length]);
+
+        let bestGain = MIN_GAIN;
+        let bestPosition = -1;
+        let bestReversed = false;
+        for (let p = 0; p <= rest.length; p++) {
+          if (p === i) continue;
+          for (const reversed of [false, true]) {
+            const first = reversed ? run[length - 1] : run[0];
+            const last = reversed ? run[0] : run[length - 1];
+            const gain = removalGain + sim(rest[p - 1], first) + sim(last, rest[p]) - sim(rest[p - 1], rest[p]);
+            if (gain > bestGain) { bestGain = gain; bestPosition = p; bestReversed = reversed; }
+          }
+        }
+
+        if (bestPosition >= 0) {
+          const placed = bestReversed ? [...run].reverse() : run;
+          rest.splice(bestPosition, 0, ...placed);
+          rest.forEach((tab, k) => { order[k] = tab; });
+          improved = true;
+        }
+      }
+    }
+  }
+  return order;
+}
+
+/**
+ * The tab order Threadline uses: MST + DFS and the best greedy walk, each
+ * polished by local search, keeping the stronger of the two.
+ *
+ * @param {ArrayLike<ArrayLike<number>>} simMatrix - N×N similarity matrix
+ * @returns {number[]} Ordered array of tab indices
+ */
+export function buildChainOrder(simMatrix) {
+  const n = simMatrix.length;
+  if (n <= 2) return Array.from({ length: n }, (_, i) => i);
+
+  const fromTree = improveChain(traverseMST(buildMST(simMatrix, n), n), simMatrix);
+  const fromGreedy = improveChain(bestGreedyOrder(simMatrix), simMatrix);
+  return chainSimilarity(fromTree, simMatrix) >= chainSimilarity(fromGreedy, simMatrix)
+    ? fromTree
+    : fromGreedy;
 }
 
 // ─── SIMILARITY ANNOTATION ────────────────────────────────────────────────

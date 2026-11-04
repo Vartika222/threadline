@@ -1,11 +1,11 @@
 /**
  * tests/clusterer.test.js
  *
- * Tests for UMAP + k-means clustering.
+ * Tests for agglomerative topic clustering.
  * Run with: node tests/clusterer.test.js
  */
 
-import { clusterTabs, reduceWithUMAP } from '../src/ml/clusterer.js';
+import { clusterTabs } from '../src/ml/clusterer.js';
 
 let passed = 0;
 let failed = 0;
@@ -75,29 +75,6 @@ test('handles single tab', () => {
 test('handles two tabs', () => {
   const result = clusterTabs([[1, 0], [0, 1]]);
   assert(result.length === 2);
-});
-
-console.log('\n── reduceWithUMAP ───────────────────────────────────────────');
-
-test('output has same length as input', () => {
-  const points = reduceWithUMAP(MOCK_EMBEDDINGS);
-  assert(points.length === MOCK_EMBEDDINGS.length);
-});
-
-test('each output point has 2 dimensions', () => {
-  const points = reduceWithUMAP(MOCK_EMBEDDINGS);
-  points.forEach((p, i) => {
-    assert(Array.isArray(p) && p.length === 2,
-      `Point ${i} has ${p.length} dimensions, expected 2`);
-  });
-});
-
-test('output values are finite numbers', () => {
-  const points = reduceWithUMAP(MOCK_EMBEDDINGS);
-  points.forEach((p, i) => {
-    assert(isFinite(p[0]) && isFinite(p[1]),
-      `Point ${i} has non-finite values: [${p}]`);
-  });
 });
 
 console.log('\n─────────────────────────────────────────────────────────────');

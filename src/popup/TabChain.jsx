@@ -61,7 +61,7 @@ export default function TabChain({ chain, clusters, onReorder }) {
     next.splice(i, 0, moved);
 
     reset();
-    onReorder?.(next);
+    onReorder?.(next, moved.tabId);
   }
 
   function reset() {

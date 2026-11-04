@@ -8,8 +8,8 @@ import { resolve } from 'path';
  * Building a Chrome Extension with Vite requires handling three separate
  * entry points that Chrome loads in completely different contexts:
  *
- *   1. popup.html      → normal browser page context, has DOM, has WebGL
- *   2. background.js   → service worker context, no DOM, no WebGL, no window
+ *   1. popup.html      → normal browser page context, has DOM
+ *   2. background.js   → service worker context, no DOM, no window
  *   3. content_script.js → injected into web pages, isolated JS environment
  *
  * PROBLEM: Vite's default build bundles everything into chunks with dynamic
@@ -44,7 +44,7 @@ export default defineConfig(({ mode }) => ({
     emptyOutDir: true,
     sourcemap:  mode === 'development', // source maps in dev, not prod
     target:               'chrome112', // modern Chrome — no need for old polyfills
-    chunkSizeWarningLimit: 1600,       // TF.js is ~1.4MB minified — unavoidable
+    chunkSizeWarningLimit: 1600,
 
     rollupOptions: {
       input: {
@@ -72,20 +72,6 @@ export default defineConfig(({ mode }) => ({
 
         chunkFileNames:  'assets/[name]-[hash].js',
         assetFileNames:  'assets/[name]-[hash].[ext]',
-
-        // CRITICAL: Do not split background.js or content_script.js into chunks.
-        // Chrome cannot handle dynamic imports in service workers.
-        // manualChunks returning undefined for these entries prevents splitting.
-        manualChunks(id) {
-          // Keep TF.js in a shared chunk for the popup (it's large, ~3MB)
-          if (id.includes('@tensorflow') || id.includes('universal-sentence-encoder')) {
-            return 'tfjs';
-          }
-          // umap-js in its own chunk
-          if (id.includes('umap-js')) {
-            return 'umap';
-          }
-        },
       },
 
       // Do not tree-shake exports from background/content entries —

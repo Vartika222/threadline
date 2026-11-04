@@ -5,17 +5,17 @@
  * the labelled tabs in eval/tabs.json (8 topics x 6 tabs), orders each subset
  * four ways, and scores how well each ordering keeps same-topic tabs together:
  *
- *   mst-dfs   Threadline: maximum spanning tree + DFS traversal (graph.js)
- *   greedy-nn greedy "go to the most similar unvisited tab" chain
- *   random    a random order (the floor)
- *   original  the order the tabs were drawn in (also random here; sanity check)
+ *   threadline best of MST + DFS and greedy, with local search (buildChainOrder)
+ *   mst-dfs    maximum spanning tree + DFS traversal alone
+ *   greedy-nn  greedy "go to the most similar unvisited tab" chain
+ *   random     a random order (the floor)
  *
- * It also scores Threadline's topic clustering (UMAP + k-means) against the
+ * It also scores Threadline's topic clustering (agglomerative) against the
  * ground-truth topics with the Adjusted Rand Index.
  *
  * Usage:
  *   npm run eval                       # offline lexical stand-in (checks the harness)
- *   npm run eval:use                   # real Universal Sentence Encoder (needs network)
+ *   npm run eval:model                 # real model (all-MiniLM-L6-v2, bundled)
  *   node eval/run.js --trials=200 --sizes=10,20
  *
  * WHAT THIS DOES NOT MEASURE: personalisation. Whether the learned network
@@ -28,7 +28,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { cosineSimilarity } from '../src/ml/embedder.js';
-import { buildSimilarityMatrix, buildMST, traverseMST } from '../src/ml/graph.js';
+import { buildSimilarityMatrix, buildMST, traverseMST, buildChainOrder } from '../src/ml/graph.js';
 import { clusterTabs } from '../src/ml/clusterer.js';
 import { getEmbedder } from './embedders.js';
 import {
@@ -90,6 +90,7 @@ export async function runEvaluation({ embedder: embedderName, trials, sizes, see
 
   for (const size of sizes) {
     const scores = {
+      'threadline': { adj: [], runs: [] },
       'mst-dfs':   { adj: [], runs: [] },
       'greedy-nn': { adj: [], runs: [] },
       'random':    { adj: [], runs: [] },
@@ -103,6 +104,7 @@ export async function runEvaluation({ embedder: embedderName, trials, sizes, see
       const sim = buildSimilarityMatrix(subEmb, cosineSimilarity);
 
       const orders = {
+        'threadline': buildChainOrder(sim),
         'mst-dfs':   mstDfsOrder(sim),
         'greedy-nn': greedyNearestNeighbourOrder(sim),
         'random':    shuffled(subGroups.map((_, i) => i), rand),
@@ -130,17 +132,17 @@ export function renderMarkdown({ embedderName, trials, rows }) {
   lines.push('');
   lines.push(`Embedder: **${embedderName}**${embedderName === 'hash'
     ? ' (offline lexical stand-in, NOT the real model — numbers only validate the harness)'
-    : ' (Universal Sentence Encoder)'}`);
+    : ' (all-MiniLM-L6-v2)'}`);
   lines.push(`Trials per size: ${trials}. Values are mean ± standard error. Data: eval/tabs.json (8 topics × 6 tabs).`);
   lines.push('');
   lines.push('**Neighbour agreement** = share of adjacent tabs in the chain from the same topic (higher is better).');
   lines.push('**Runs per topic** = contiguous stretches per topic (1.0 is ideal; lower is better).');
-  lines.push('**Clustering ARI** = agreement of UMAP+k-means clusters with true topics (1 = perfect, 0 = chance).');
+  lines.push('**Clustering ARI** = agreement of the topic groups with true topics (1 = perfect, 0 = chance).');
   lines.push('');
   lines.push('| Tabs | Ordering | Neighbour agreement ↑ | Runs per topic ↓ |');
   lines.push('| ---: | --- | ---: | ---: |');
   for (const { size, scores } of rows) {
-    for (const name of ['mst-dfs', 'greedy-nn', 'random']) {
+    for (const name of ['threadline', 'mst-dfs', 'greedy-nn', 'random']) {
       lines.push(`| ${size} | ${name} | ${fmt(scores[name].adj)} | ${fmt(scores[name].runs)} |`);
     }
   }

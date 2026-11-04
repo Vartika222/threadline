@@ -2,7 +2,7 @@
  * tests/graph.test.js
  *
  * Tests for the graph module (similarity matrix, MST, traversal).
- * Does NOT require TF.js or a browser — uses mock embeddings.
+ * Does NOT require the language model or a browser — uses mock embeddings.
  *
  * Run with: node tests/graph.test.js
  */
@@ -13,9 +13,13 @@ import {
   traverseMST,
   annotateChain,
   reannotateChain,
+  buildChainOrder,
+  bestGreedyOrder,
+  improveChain,
+  chainSimilarity,
 } from '../src/ml/graph.js';
 
-// ─── Mock cosine similarity (no TF.js needed) ────────────────────────────
+// ─── Mock cosine similarity (no model needed) ────────────────────────────
 
 function cosineSim(a, b) {
   let dot = 0, magA = 0, magB = 0;
@@ -201,6 +205,67 @@ test('annotates similarity to next correctly', () => {
   const chain = annotateChain([0, 1], matrix);
   assertClose(chain[0].similarityToNext, 0.7);
   assert(chain[1].similarityToNext === null, 'Last item should have null similarityToNext');
+});
+
+console.log('\n── buildChainOrder ──────────────────────────────────────────');
+
+/** Seeded random symmetric similarity matrix. */
+function randomMatrix(n, seed) {
+  let x = seed;
+  const next = () => (x = (x * 16807) % 2147483647) / 2147483647;
+  const m = Array.from({ length: n }, () => new Array(n).fill(1));
+  for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) m[i][j] = m[j][i] = next();
+  return m;
+}
+const isPermutation = (order, n) => order.length === n && new Set(order).size === n;
+
+test('returns every tab exactly once, for any number of tabs', () => {
+  for (const n of [0, 1, 2, 3, 4, 7, 20, 60]) {
+    assert(isPermutation(buildChainOrder(randomMatrix(n, 7 + n)), n), `not a permutation for n=${n}`);
+  }
+});
+
+test('local search never lowers the total and keeps every tab', () => {
+  for (let seed = 1; seed <= 25; seed++) {
+    const m = randomMatrix(15, seed * 31);
+    const start = bestGreedyOrder(m);
+    const improved = improveChain(start, m);
+    assert(isPermutation(improved, 15), 'lost a tab');
+    assert(chainSimilarity(improved, m) >= chainSimilarity(start, m) - 1e-9, 'total went down');
+  }
+});
+
+test('chain is at least as strong as MST + DFS and as greedy', () => {
+  for (let seed = 1; seed <= 25; seed++) {
+    const m = randomMatrix(15, seed * 37);
+    const total = chainSimilarity(buildChainOrder(m), m);
+    assert(total >= chainSimilarity(traverseMST(buildMST(m, 15), 15), m) - 1e-9, 'weaker than MST + DFS');
+    assert(total >= chainSimilarity(bestGreedyOrder(m), m) - 1e-9, 'weaker than greedy');
+  }
+});
+
+test('local search repairs a chain with a crossed connection', () => {
+  // Best path is 0-1-2-3; the start order has its middle reversed.
+  const m = [[1, 0.9, 0.1, 0.1], [0.9, 1, 0.9, 0.1], [0.1, 0.9, 1, 0.9], [0.1, 0.1, 0.9, 1]];
+  const out = improveChain([0, 2, 1, 3], m);
+  assert(chainSimilarity(out, m) > 2.69, `total ${chainSimilarity(out, m)}, expected 2.7`);
+});
+
+test('topics stay contiguous on clearly separated data', () => {
+  const topic = (i) => Math.floor(i / 4);
+  const m = Array.from({ length: 12 }, (_, i) => Array.from({ length: 12 }, (_, j) =>
+    i === j ? 1 : topic(i) === topic(j) ? 0.8 + ((i + j) % 3) * 0.05 : 0.1 + ((i * j) % 5) * 0.02));
+  const order = buildChainOrder(m);
+  let runs = 1;
+  for (let k = 1; k < 12; k++) if (topic(order[k]) !== topic(order[k - 1])) runs++;
+  assert(runs === 3, `expected 3 runs, got ${runs}: ${order}`);
+});
+
+test('200 tabs finish in well under a second', () => {
+  const m = randomMatrix(200, 99);
+  const t = Date.now();
+  buildChainOrder(m);
+  assert(Date.now() - t < 1000, `took ${Date.now() - t}ms`);
 });
 
 console.log('\n── reannotateChain ──────────────────────────────────────────');

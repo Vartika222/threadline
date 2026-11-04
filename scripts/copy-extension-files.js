@@ -23,6 +23,7 @@ import { fileURLToPath } from 'url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
 const DIST = path.resolve(ROOT, 'dist');
+const ORT_FILES = ['ort-wasm-simd-threaded.jsep.mjs', 'ort-wasm-simd-threaded.jsep.wasm'];
 
 function copyFile(src, dest) {
   const destDir = path.dirname(dest);
@@ -51,5 +52,19 @@ copyFile(path.join(ROOT, 'manifest.json'),       path.join(DIST, 'manifest.json'
 copyFile(path.join(ROOT, 'background.js'),        path.join(DIST, 'background.js'));
 copyFile(path.join(ROOT, 'content_script.js'),    path.join(DIST, 'content_script.js'));
 copyDir( path.join(ROOT, 'icons'),                path.join(DIST, 'icons'));
+
+// The WebAssembly runtime that runs the language model. Transformers.js would
+// otherwise fetch these from a CDN.
+const ORT_DIST = path.join(ROOT, 'node_modules', 'onnxruntime-web', 'dist');
+for (const file of ORT_FILES) {
+  copyFile(path.join(ORT_DIST, file), path.join(DIST, 'ort', file));
+}
+
+// Vite also emits its own copy of the .wasm, which nothing loads because
+// embedder.js points the runtime at ort/. Remove it to save about 21MB.
+const ASSETS = path.join(DIST, 'assets');
+for (const file of fs.readdirSync(ASSETS)) {
+  if (file.endsWith('.wasm')) fs.rmSync(path.join(ASSETS, file));
+}
 
 console.log('\ndist/ is ready to load in Chrome.\n');

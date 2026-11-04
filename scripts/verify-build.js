@@ -25,6 +25,13 @@ const REQUIRED = [
   'icons/icon16.png',
   'icons/icon48.png',
   'icons/icon128.png',
+  // The language model and its runtime, bundled so sorting works offline
+  'model/all-MiniLM-L6-v2/config.json',
+  'model/all-MiniLM-L6-v2/tokenizer.json',
+  'model/all-MiniLM-L6-v2/tokenizer_config.json',
+  'model/all-MiniLM-L6-v2/onnx/model_quantized.onnx',
+  'ort/ort-wasm-simd-threaded.jsep.mjs',
+  'ort/ort-wasm-simd-threaded.jsep.wasm',
 ];
 
 let ok = true;
@@ -66,6 +73,7 @@ try {
     ['action.default_popup', !!manifest.action?.default_popup, 'action.default_popup is missing'],
     ['permissions includes tabs',    manifest.permissions?.includes('tabs'),    'tabs permission missing'],
     ['permissions includes storage', manifest.permissions?.includes('storage'), 'storage permission missing'],
+    ['CSP allows WebAssembly', manifest.content_security_policy?.extension_pages?.includes('wasm-unsafe-eval'), 'the language model needs wasm-unsafe-eval'],
   ];
 
   for (const [label, passes, message] of checks) {
