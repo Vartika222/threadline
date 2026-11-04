@@ -1,4 +1,4 @@
-# Loading Threadline in Chrome — V2 Guide
+# Loading Threadline in Chrome
 
 ## Step 1: Build
 
@@ -12,7 +12,7 @@ Expected output ends with:
 ✓  dist/ is ready to load in Chrome
 ```
 
-If you see errors, fix them before continuing. The most common: missing icons (run `node scripts/generate-icons.js` if they're not there).
+If you see errors, fix them before continuing. The most common is a missing `icons/` folder — it must contain icon16.png, icon48.png and icon128.png.
 
 ---
 
@@ -89,7 +89,7 @@ If the sort produces a visually random order, check the popup's DevTools console
 ## Common Problems
 
 ### `Failed to load TensorFlow.js`
-USE loads its model weights from a CDN on first use (~25MB download). This requires internet access and may fail on corporate networks. You'll see a network error in the popup console. Fix for V3: bundle the model weights locally.
+USE loads its model weights from Google-hosted URLs on first use (~25MB download). This requires internet access and may fail on corporate or school networks. You'll see a network error in the popup console. (Bundling the weights locally is on the roadmap.)
 
 ### `chrome is not defined` in popup
 This happens if the popup JS runs outside the extension context (e.g. if you open `popup.html` directly as a file). Always open the popup by clicking the extension icon.
@@ -102,7 +102,7 @@ First sort is slow (~3-5s) because USE loads. Subsequent sorts in the same popup
 
 ---
 
-## What to check before calling V2 done
+## Checklist
 
 - [ ] `npm run build:verify` exits 0
 - [ ] Extension loads in chrome://extensions without red errors

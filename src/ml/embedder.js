@@ -40,7 +40,15 @@ async function loadModel() {
   const use = await import('@tensorflow-models/universal-sentence-encoder');
   await import('@tensorflow/tfjs');
 
-  _model = await use.load();
+  try {
+    _model = await use.load();
+  } catch (err) {
+    // The browser's own message ("Failed to fetch") doesn't say what to do.
+    throw new Error(
+      'Could not download the language model (about 25MB, needed the first time you sort). ' +
+      'Check your internet connection and try again.'
+    );
+  }
   return _model;
 }
 

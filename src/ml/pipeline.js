@@ -20,6 +20,8 @@
 import { embedTexts, cosineSimilarity }                           from './embedder.js';
 import { buildSimilarityMatrix, buildMST, traverseMST, annotateChain } from './graph.js';
 import { clusterTabs }                                             from './clusterer.js';
+import { labelClusters }                                           from './labeler.js';
+import { consumeImplicitPairs }                                    from './implicitFeedback.js';
 import {
   loadSavedModel,
   scoreAllPairs,
@@ -33,7 +35,9 @@ export async function runMLPipeline(tabs, onProgress = () => {}) {
     return {
       chain:    [{ ...tabs[0], chainPosition: 0, similarityToNext: null }],
       clusters: { [tabs[0].tabId]: 0 },
+      clusterLabels: { 0: 'All Tabs' },
       method:   'trivial',
+      implicitExampleCount: 0,
     };
   }
 
@@ -45,6 +49,14 @@ export async function runMLPipeline(tabs, onProgress = () => {}) {
   onProgress('Loading language model...');
   const embeddings = await embedTexts(contents, onProgress);
   tabs.forEach((tab, i) => { tab.embedding = embeddings[i]; });
+
+  // ── STEP 1b: IMPLICIT FEEDBACK ────────────────────────────────────────
+  // background.js queues tabId pairs the user kept switching between
+  // (attentional residue signal). Now that tabs have embeddings, drain
+  // that queue into real training examples. Runs every sort — cheap when
+  // the queue is empty, which it usually is.
+  onProgress('Learning from tab-switch patterns...');
+  const implicitCount = await consumeImplicitPairs(tabs);
 
   // ── STEP 2: BASELINE SIMILARITY MATRIX ────────────────────────────────
   // Cosine similarity between all pairs. Always computed — used as fallback
@@ -105,7 +117,13 @@ export async function runMLPipeline(tabs, onProgress = () => {}) {
   const clusters = {};
   tabs.forEach((tab, i) => { clusters[tab.tabId] = clusterAssignments[i]; });
 
-  return { chain, clusters, method };
+  // ── STEP 6: LABEL CLUSTERS ─────────────────────────────────────────────
+  // TF-IDF over each cluster's tab content picks 1-2 distinguishing words,
+  // so the UI can show "React Hooks" / "Trip Planning" instead of just
+  // colour dots. See labeler.js for why cluster-level (not tab-level) TF-IDF.
+  const clusterLabels = labelClusters(tabs, clusterAssignments);
+
+  return { chain, clusters, clusterLabels, method, implicitExampleCount: implicitCount };
 }
 
 /**

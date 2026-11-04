@@ -12,6 +12,15 @@
  * They communicate with background.js via chrome.runtime.sendMessage.
  */
 
+// Guard + IIFE: this file can be injected twice into the same page (once by
+// the manifest, once by background.js when the extension is installed while
+// the page is already open). Without the guard the second run would throw
+// "Identifier 'dwellStart' has already been declared" and add duplicate
+// listeners.
+(function () {
+if (globalThis.__threadlineContentScriptLoaded) return;
+globalThis.__threadlineContentScriptLoaded = true;
+
 // ─── Dwell Time Tracking ───────────────────────────────────────────────────
 
 let dwellStart = Date.now();
@@ -125,3 +134,4 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 // Send initial data when script loads
 setTimeout(notifyBackground, 1000); // Wait 1s for page to settle
+})();
