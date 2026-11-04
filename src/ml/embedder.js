@@ -23,7 +23,8 @@
  */
 
 // Module-level cache so we only load the model once per popup session.
-// Loading USE takes ~1-2s the first time; after that it's instant.
+// Measured on an M4 Mac: about 15s with an empty browser cache, about 4s for
+// each new popup after that, then under 0.5s for repeat sorts in the same popup.
 let _model = null;
 
 /**
@@ -45,8 +46,9 @@ async function loadModel() {
   } catch (err) {
     // The browser's own message ("Failed to fetch") doesn't say what to do.
     throw new Error(
-      'Could not download the language model (about 25MB, needed the first time you sort). ' +
-      'Check your internet connection and try again.'
+      'Could not load the language model. Threadline downloads it from the internet ' +
+      'each time the popup opens (about 25MB the first time, then mostly cached). ' +
+      'Check your connection and try again.'
     );
   }
   return _model;

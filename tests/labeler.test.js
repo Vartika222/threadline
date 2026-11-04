@@ -24,6 +24,14 @@ function assert(condition, message) {
   if (!condition) throw new Error(message || 'Assertion failed');
 }
 
+test('labels do not depend on tab order when words tie', () => {
+  const tabs = [{ content: 'zebra' }, { content: 'apple' }, { content: 'mango' }];
+  const forward = labelClusters(tabs, [0, 0, 0], { topTermsPerCluster: 2 });
+  const backward = labelClusters([...tabs].reverse(), [0, 0, 0], { topTermsPerCluster: 2 });
+  assert(forward[0] === backward[0], `"${forward[0]}" vs "${backward[0]}"`);
+  assert(forward[0] === 'Apple & Mango', `got "${forward[0]}"`);
+});
+
 console.log('\n── labelClusters ─────────────────────────────────────────────');
 
 test('returns one label per distinct cluster index', () => {

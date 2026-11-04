@@ -15,15 +15,17 @@
  * to chrome.storage is lost. Keep UI state lightweight.
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import TabChain, { CLUSTER_COLORS } from './TabChain.jsx';
 import SortButton from './SortButton.jsx';
 import { runMLPipeline } from '../ml/pipeline.js';
 import { deriveTrainingPairs } from '../ml/feedback.js';
+import { reannotateChain } from '../ml/graph.js';
 import { computeRecencyNorm, formatIdleDuration } from '../ml/recency.js';
 import {
   storeTrainingExample,
   loadTrainingExamples,
+  loadExamplesSeen,
   loadSavedModel,
   buildModel,
   trainModel,
@@ -44,6 +46,7 @@ export default function App() {
   const [sortedChain, setSortedChain] = useState([]);
   const [clusters, setClusters] = useState({});
   const [clusterLabels, setClusterLabels] = useState({});
+  const [simMatrix, setSimMatrix] = useState(null);
   const [progress, setProgress] = useState('');
   const [error, setError] = useState(null);
 
@@ -52,6 +55,7 @@ export default function App() {
   // building toward something (a "3/15 examples" counter vs. silent logging).
   const [exampleCount, setExampleCount] = useState(0);
   const [trainingStatus, setTrainingStatus] = useState('idle'); // idle | training | trained
+  const isTraining = useRef(false); // a drag can arrive while training is still running
 
   useEffect(() => {
     loadTrainingExamples().then(examples => setExampleCount(examples.length));
@@ -82,6 +86,7 @@ export default function App() {
       setSortedChain(result.chain);
       setClusters(result.clusters);
       setClusterLabels(result.clusterLabels || {});
+      setSimMatrix(result.simMatrix);
       setView('sorted');
 
       // The pipeline may have just drained the implicit tab-switch-burst
@@ -90,7 +95,7 @@ export default function App() {
       // whether that alone crossed the retrain threshold.
       const examples = await loadTrainingExamples();
       setExampleCount(examples.length);
-      maybeRetrain(examples.length);
+      maybeRetrain();
     } catch (err) {
       setError(err.message);
       setView('idle');
@@ -99,7 +104,12 @@ export default function App() {
 
   async function handleApply() {
     const orderedTabIds = sortedChain.map(t => t.tabId);
-    await chrome.runtime.sendMessage({ type: 'APPLY_ORDER', orderedTabIds });
+    const response = await chrome.runtime.sendMessage({ type: 'APPLY_ORDER', orderedTabIds });
+    if (response?.error) {
+      setError(`Could not reorder the tabs: ${response.error}`);
+      setView('idle');
+      return;
+    }
     window.close(); // Close the popup after applying
   }
 
@@ -108,7 +118,8 @@ export default function App() {
    * The drag itself is the label: see feedback.js for how "before" vs.
    * "after" adjacency turns into (aId, bId, label) contrastive pairs.
    */
-  async function handleReorder(newChain) {
+  async function handleReorder(reordered) {
+    const newChain = reannotateChain(reordered, simMatrix);
     const pairs = deriveTrainingPairs(sortedChain, newChain);
     setSortedChain(newChain); // update the UI immediately, don't block on storage
 
@@ -127,7 +138,7 @@ export default function App() {
     }
 
     setExampleCount(total);
-    maybeRetrain(total);
+    maybeRetrain();
   }
 
   /**
@@ -136,24 +147,31 @@ export default function App() {
    * the popup — doesn't block the UI, since the user has already moved on to
    * looking at their (now-updated) chain.
    *
-   * The decision compares the example count with the count at the last
+   * The decision compares the lifetime example count with its value at the last
    * training run (stored as nn_trained_count) — see shouldRetrain in nn.js.
+   * Only one run at a time: examples that arrive during a run count towards the
+   * next one.
    */
-  async function maybeRetrain(total) {
-    const { nn_trained_count } = await chrome.storage.local.get('nn_trained_count');
-    if (!shouldRetrain(total, nn_trained_count)) return;
-
-    setTrainingStatus('training');
+  async function maybeRetrain() {
+    if (isTraining.current) return;
+    isTraining.current = true;
     try {
+      const seen = await loadExamplesSeen();
+      const { nn_trained_count } = await chrome.storage.local.get('nn_trained_count');
+      if (!shouldRetrain(seen, nn_trained_count)) return;
+
+      setTrainingStatus('training');
       const examples = await loadTrainingExamples();
       const model = (await loadSavedModel()) || (await buildModel());
       await trainModel(examples, model, { epochs: 15 });
       await saveModel(model);
-      await chrome.storage.local.set({ nn_trained_count: examples.length });
+      await chrome.storage.local.set({ nn_trained_count: seen });
       setTrainingStatus('trained');
     } catch (err) {
       console.error('[Threadline] Training failed:', err);
       setTrainingStatus('idle');
+    } finally {
+      isTraining.current = false;
     }
   }
 
@@ -278,7 +296,7 @@ function LearningStatus({ exampleCount, trainingStatus }) {
   if (exampleCount > 0) {
     return (
       <div className="learning-status">
-        {exampleCount}/{NN_ACTIVATION_THRESHOLD} corrections learned — drag more tabs to personalise sorting
+        {exampleCount}/{NN_ACTIVATION_THRESHOLD} training examples — drag more tabs to personalise sorting
       </div>
     );
   }

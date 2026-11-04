@@ -135,14 +135,11 @@ Three stages:
 
 3. **`traverseMST`**: DFS over the resulting tree, starting from the
    highest-degree node (the most "central" tab), visiting neighbours in
-   descending edge-weight order. This is *why* MST+DFS beats naive
-   "sort by similarity to previous tab": a greedy nearest-neighbour walk gets
-   trapped inside one topic cluster and only escapes when it runs out of
-   similar tabs, producing an order that revisits topics. MST considers
-   global structure first, so bridging tabs (one about "React" that also
-   touches "V8 internals") land where they actually belong — between both
-   clusters — rather than being greedily assigned to whichever neighbour it
-   happened to be compared against first.
+   descending edge-weight order. The idea is that MST considers global
+   structure first, where a greedy "go to the most similar tab" walk only looks
+   one step ahead. **Measured, though, the greedy walk scores slightly higher**
+   (see the README's Evaluation section), probably because a DFS jumps back up
+   the tree whenever it finishes a branch.
 
 `annotateChain` just walks the final order and records the similarity to the
 *next* tab, which the UI uses to draw the connector-line opacity and the `%`
@@ -162,7 +159,9 @@ Pipeline: `512-dim embeddings → UMAP (→2D) → k-means → cluster labels`.
   internally (for its stochastic gradient descent-like layout optimisation),
   but a plain `Math.random()` would make the same tab set produce a
   *different* layout every time you sort. A seeded PRNG makes it
-  deterministic — reproducible clusters for the same input.
+  deterministic — reproducible clusters for the same input, in the same order.
+  `canonicalTabOrder` in `pipeline.js` supplies that order, so rearranging the
+  tabs doesn't change the result.
 - **`kmeans` + `kmeansppInit`**: standard Lloyd's-algorithm k-means, but with
   **k-means++ initialisation** — instead of picking k random starting
   centroids (which can accidentally clump two centroids together and produce
@@ -364,16 +363,19 @@ Top-level state machine with three views: `idle` (tab count + Sort button),
 `sorting` (progress spinner), `sorted` (the chain + Apply/Cancel).
 
 **New responsibilities added in this pass:**
-- `handleReorder(newChain)`: called by `TabChain` after a drag. Diffs
-  old vs. new chain via `deriveTrainingPairs`, stores each resulting pair as
-  a training example, and calls `maybeRetrain`.
-- `maybeRetrain(total)`: asks `shouldRetrain(total, nn_trained_count)` in
+- `handleReorder(reordered)`: called by `TabChain` after a drag. Recalculates
+  the similarity shown between neighbours (`reannotateChain`), diffs old vs. new
+  chain via `deriveTrainingPairs`, stores each resulting pair as a training
+  example, and calls `maybeRetrain`.
+- `maybeRetrain()`: asks `shouldRetrain(seen, nn_trained_count)` in
   `nn.js` — train once 15 examples exist, then again after every 5 new ones —
   so it does not retrain on every single drag (the popup would stutter and fit
   a fresh model to one noisy correction at a time). It compares against the
   count at the *last training run* rather than testing for exact counts: a
-  drag adds 2–4 examples at once, and an exact-count check (the earlier
+  drag adds 2–6 examples at once, and an exact-count check (the earlier
   version) skipped training whenever the total jumped past 15, 20, 25...
+  `seen` is a lifetime count, because the stored count stops growing at the
+  200-example cap. Only one training run happens at a time.
 - `handleSort` now also refreshes the example count and checks for a retrain
   *after* the pipeline runs, since implicit pairs can cross the training
   threshold with zero drags involved.
@@ -424,7 +426,7 @@ line), `.cluster-legend` / `.cluster-chip` (the colour+name chips), and
 
 All plain Node scripts (`node tests/x.test.js`), no test framework — each
 file exits non-zero on failure, which is enough for a project this size and
-keeps the dependency list short. `npm test` chains all thirteen files (114 tests).
+keeps the dependency list short. `npm test` chains all fourteen files (142 tests).
 `tests/helpers/chromeMock.js` provides an in-memory fake of `chrome.storage`
 and the `chrome.tabs` event hooks, plus the small runner the newer files use.
 
@@ -434,14 +436,15 @@ and the `chrome.tabs` event hooks, plus the small runner the newer files use.
 | `nn.test.js` | Behaviour vector shape/ranges, dwell/revisit capping, cyclical hour encoding correctness, recencyNorm bounds |
 | `clusterer.test.js` | Cluster count matches tab count, UMAP output is 2D and finite, distinct topics get distinct clusters |
 | `kselection.test.js` | Silhouette-based k: 2, 3 and 5 separated blobs give k = 2, 3, 5; never above 8; deterministic; silhouette scores behave on perfect, wrong and singleton clusterings |
-| `retrain.test.js` | `shouldRetrain`: trains at 15, still triggers when the count jumps past a checkpoint (13 → 16), waits for 5 new examples between trainings |
+| `retrain.test.js` | `shouldRetrain`: trains at 15, still triggers when the count jumps past a checkpoint (13 → 16), waits for 5 new examples between trainings, keeps training past the 200-example storage cap |
 | `symmetry.test.js` | The network has 72,665 parameters; a raw prediction depends on tab order but `scoreAllPairs` does not; training works on swapped copies and rejects fewer than 4 examples |
-| `determinism.test.js` | The same tabs always get identical cluster assignments (k-means is seeded) |
+| `determinism.test.js` | The same tabs always get identical cluster assignments (k-means is seeded), whatever order they arrive in (`canonicalTabOrder`) |
 | `feedback.test.js` | Drag-to-pair derivation: new adjacency → positive, broken adjacency → negative, untouched pairs → no signal |
 | `implicitFeedback.test.js` | Tab-switch pairs become one positive + one weak negative, closed tabs are dropped, embeddings are stored rounded and capped at 200 examples |
 | `recency.test.js` | Recency bounds (1 at t=0, 0 at/past the cap, ~0.5 halfway), idle-duration formatting |
 | `labeler.test.js` | Distinct clusters get distinct on-topic labels, stopwords never leak into a label, no crash on empty/single-cluster input |
-| `background.test.js` | 20 concurrent tab events lose no data (storage write queue), bad URLs don't throw, transitions and implicit candidates are counted, previous-active tab survives a worker restart, tabs already open at install are registered, pruned and given the content script |
+| `background.test.js` | 20 concurrent tab events lose no data (storage write queue), bad URLs don't throw, transitions and implicit candidates are counted, previous-active tab survives a worker restart, tabs already open at install are registered, pruned and given the content script, navigating forgets the old page's text, Apply Order handles pinned and closed tabs |
+| `contentScript.test.js` | Runs the real `content_script.js` on a fake page and clock: dwell time counts once in any order of blur, focus and visibility events; CSS and scripts stay out of the extracted text |
 | `eval.test.js` | The evaluation metrics (neighbour agreement, runs per topic, adjusted Rand index) against hand-computed values |
 
 `npm run build:verify` additionally checks that the production bundle compiles

@@ -8,7 +8,7 @@ Takes about 20 minutes. You need **Node 18 or newer** and **Google Chrome**
 ```bash
 cd threadline
 npm install
-npm test               # expect: every file prints "N passed, 0 failed" (114 tests in total)
+npm test               # expect: every file prints "N passed, 0 failed" (142 tests in total)
 npm run build:verify   # expect the last line: "✓  dist/ is ready to load in Chrome"
 ```
 
@@ -55,16 +55,21 @@ Open these nine tabs **in this mixed-up order** (so there is real work to do):
 
 Then click the Threadline icon and press **Sort by relatability**.
 
-**Needs internet the first time:** it downloads the language model (~25MB), so
-the first sort takes several seconds. With no connection you should see the
-message "Could not download the language model…" instead of a crash.
+**Needs internet every time the popup is opened:** it requests the language model
+(~25MB the first time, then mostly from the browser cache). Expect about 15
+seconds with an empty cache, about 4 seconds for each new popup, and under a
+second for another sort in the same popup (measured on an M4 Mac). With no
+connection you should see the message "Could not load the language model…"
+instead of a crash.
 
 Expected result:
 - A chain where the three React tabs sit together, the three food tabs together
   and the three Japan tabs together (the order of the groups can vary).
-- Usually three colours (the number of groups follows the data, between 2 and
-  8), with a legend of names like "react …" / "carbonara …" (names come from
-  the most distinctive words in each group).
+- Two or three colours, with a legend of names (the most distinctive words in
+  each group). Grouping tends to find too few topics: in a test run food and
+  Japan shared one colour, with the legend "React & Useeffect" / "Wikipedia &
+  Contents". Sorting the same tabs again gives the same colours and names, even
+  after their order changes.
 - Press **Apply Order** and check Chrome's tab strip rearranges to match.
 
 Note down: did the three groups come out contiguous? How many seconds did the
@@ -73,8 +78,9 @@ first sort take, and the second?
 ## 5. Test the learning loop
 
 1. Sort again, then **drag** a card to a new position in the popup list.
-2. Under the chain, a counter appears: `n/15 corrections learned`. Each drag
-   usually adds 2 to 4 examples (pairs you created and pairs you broke).
+2. Under the chain, a counter appears: `n/15 training examples`. Each drag
+   usually adds 4 to 6 examples (2 if it moves a tab from one end to the other),
+   counting the pairs you created and the pairs you broke.
 3. Keep dragging until it reaches 15. Expected: the message changes to
    "Learning from your corrections…" and then "✓ Sorting personalised to you".
 4. In the service worker console (step 3), confirm a trained model was saved:
@@ -117,7 +123,8 @@ npm run eval:use
 
 This downloads the same model in Node, scores Threadline's chain against a
 greedy and a random ordering on 48 labelled tabs, and writes the table to
-`eval/results-use.md`. Paste that table into the README's "Evaluation" section.
+`eval/results-use.md`. Compare it with the table in the README's "Evaluation"
+section.
 If the Node run cannot download the model on your network, run the offline
 version (`npm run eval`) just to check the harness, and tell me.
 

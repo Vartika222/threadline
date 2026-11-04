@@ -70,6 +70,11 @@ function updateTabStore(mutator) {
   });
 }
 
+/** A URL without its #fragment: jumping within a page is not a new page. */
+function withoutHash(url) {
+  return (url || '').split('#')[0];
+}
+
 /** Returns the hostname for a URL, or '' if the URL can't be parsed. */
 function safeHostname(url) {
   try {
@@ -307,8 +312,28 @@ chrome.tabs.onActivated.addListener(async ({ tabId }) => {
   });
 });
 
-// When a tab finishes loading, update its metadata
+/**
+ * Forgets a tab's page text as soon as it navigates to a different page.
+ *
+ * WHY: the new page's content script normally replaces the text about a second
+ * later, but some pages never run one (Chrome Web Store, PDF viewer, browser
+ * error pages). Without this, those tabs keep being embedded using the text of
+ * whatever page they showed before. The sort falls back to the tab's title.
+ */
+function forgetPageTextOnNavigation(tabId, newUrl) {
+  return updateTabStore((store) => {
+    const entry = store[tabId];
+    if (!entry || withoutHash(entry.url) === withoutHash(newUrl)) return;
+    entry.url = newUrl;
+    entry.domain = safeHostname(newUrl);
+    entry.content = '';
+    entry.description = '';
+  });
+}
+
+// When a tab navigates or finishes loading, update its metadata
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
+  if (changeInfo.url) await forgetPageTextOnNavigation(tabId, changeInfo.url);
   if (changeInfo.status !== 'complete') return;
 
   await updateTabStore((store) => {
@@ -326,6 +351,7 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
       title: tab.title || '',
       url: tab.url || '',
       domain: safeHostname(tab.url),
+      content: store[tabId].content || tab.title || '',
       lastUpdated: Date.now(),
     };
   });
@@ -339,6 +365,38 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   });
   return true; // Required to use async sendResponse
 });
+
+/**
+ * Moves tabs into the chain's order, as far as Chrome allows.
+ *
+ * Chrome keeps pinned tabs before all others, so each kind is ordered within
+ * its own region. Using one running index for both would make Chrome clamp the
+ * moves and scatter the unpinned tabs. Tabs that were closed since the sort are
+ * skipped, so one missing tab can't abandon the reorder halfway.
+ */
+async function applyTabOrder(orderedTabIds) {
+  const windowTabs = await chrome.tabs.query({ currentWindow: true });
+  const byId = new Map(windowTabs.map(t => [t.id, t]));
+  const live = orderedTabIds.filter(id => byId.has(id));
+
+  const pinnedTotal = windowTabs.filter(t => t.pinned).length;
+  const pinned = live.filter(id => byId.get(id).pinned);
+  const unpinned = live.filter(id => !byId.get(id).pinned);
+  const moves = [
+    ...pinned.map((id, i) => [id, pinnedTotal - pinned.length + i]),
+    ...unpinned.map((id, i) => [id, pinnedTotal + i]),
+  ];
+
+  let failed = 0;
+  for (const [id, index] of moves) {
+    try {
+      await chrome.tabs.move(id, { index: index - failed });
+    } catch {
+      failed++; // closed mid-loop: everything after it shifts left by one
+    }
+  }
+  return { ok: true, skipped: orderedTabIds.length - live.length + failed };
+}
 
 async function handleMessage(message, sender) {
   switch (message.type) {
@@ -395,11 +453,7 @@ async function handleMessage(message, sender) {
 
     case 'APPLY_ORDER': {
       // Popup has sorted the tabs and wants to rearrange them in Chrome
-      const { orderedTabIds } = message;
-      for (let i = 0; i < orderedTabIds.length; i++) {
-        await chrome.tabs.move(orderedTabIds[i], { index: i });
-      }
-      return { ok: true };
+      return applyTabOrder(message.orderedTabIds);
     }
 
     case 'SAVE_SNAPSHOT': {

@@ -8,7 +8,7 @@
     "dev": "vite build --watch --mode development && node scripts/copy-extension-files.js",
     "build": "vite build && node scripts/copy-extension-files.js",
     "build:verify": "npm run build && node scripts/verify-build.js",
-    "test": "node tests/graph.test.js && node tests/nn.test.js && node tests/clusterer.test.js && node tests/feedback.test.js && node tests/recency.test.js && node tests/labeler.test.js && node tests/implicitFeedback.test.js && node tests/background.test.js && node tests/eval.test.js && node tests/determinism.test.js && node tests/kselection.test.js && node tests/retrain.test.js && node tests/symmetry.test.js",
+    "test": "node tests/graph.test.js && node tests/nn.test.js && node tests/clusterer.test.js && node tests/feedback.test.js && node tests/recency.test.js && node tests/labeler.test.js && node tests/implicitFeedback.test.js && node tests/background.test.js && node tests/eval.test.js && node tests/determinism.test.js && node tests/kselection.test.js && node tests/retrain.test.js && node tests/symmetry.test.js && node tests/contentScript.test.js",
     "eval": "node eval/run.js",
     "eval:use": "node eval/run.js --embedder=use",
     "ci": "npm test && npm run build:verify"

@@ -23,38 +23,49 @@ globalThis.__threadlineContentScriptLoaded = true;
 
 // ─── Dwell Time Tracking ───────────────────────────────────────────────────
 
-let dwellStart = Date.now();
+// One timer with two transitions, because the browser fires blur, focus and
+// visibilitychange in overlapping combinations. Each transition does nothing
+// if the timer is already in that state, so no stretch of time is counted
+// twice and an extra focus event can't throw away time already running.
 let totalDwell = 0;
-let isVisible = !document.hidden;
+let dwellStart = null; // null = not counting right now
 
-// Track when the tab becomes visible/hidden
+function startDwell() {
+  if (dwellStart === null && !document.hidden) dwellStart = Date.now();
+}
+
+function stopDwell() {
+  if (dwellStart === null) return;
+  totalDwell += Date.now() - dwellStart;
+  dwellStart = null;
+}
+
+startDwell();
+
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) {
-    // Tab became hidden — accumulate dwell
-    totalDwell += Date.now() - dwellStart;
-    isVisible = false;
+    stopDwell();
   } else {
-    // Tab became visible — start new dwell period
-    dwellStart = Date.now();
-    isVisible = true;
+    startDwell();
     notifyBackground();
   }
 });
 
-// Update background whenever user refocuses
-window.addEventListener('focus', () => {
-  dwellStart = Date.now();
-  isVisible = true;
-});
-
-window.addEventListener('blur', () => {
-  if (isVisible) {
-    totalDwell += Date.now() - dwellStart;
-    isVisible = false;
-  }
-});
+window.addEventListener('focus', startDwell);
+window.addEventListener('blur', stopDwell);
 
 // ─── Content Extraction ───────────────────────────────────────────────────
+
+/**
+ * An element's readable text. textContent alone also returns the contents of
+ * nested <style> and <script> tags: Wikipedia puts CSS inside its paragraphs,
+ * which would otherwise end up in the embedding and in the topic names.
+ */
+function readableText(element) {
+  const copy = element.cloneNode(true);
+  copy.querySelectorAll('style, script, noscript').forEach(el => el.remove());
+  return copy.textContent.trim();
+}
 
 /**
  * Extracts meaningful text from the page for embedding.
@@ -72,14 +83,15 @@ function extractContent() {
   // Top-level headings
   const headings = Array.from(document.querySelectorAll('h1, h2'))
     .slice(0, 5)
-    .map(h => h.textContent.trim())
+    .map(readableText)
     .filter(Boolean)
     .join('. ');
 
   // First meaningful paragraph
   const firstPara = Array.from(document.querySelectorAll('p'))
-    .find(p => p.textContent.trim().length > 50)
-    ?.textContent.trim().slice(0, 200) || '';
+    .map(readableText)
+    .find(text => text.length > 50)
+    ?.slice(0, 200) || '';
 
   // Combine into a single string for embedding
   // ORDER MATTERS: title is most reliable signal, so weight it by repetition
@@ -100,7 +112,7 @@ function extractContent() {
 // ─── Communication with Background ────────────────────────────────────────
 
 function getDwellTime() {
-  const current = isVisible ? (Date.now() - dwellStart) : 0;
+  const current = dwellStart === null ? 0 : Date.now() - dwellStart;
   return totalDwell + current;
 }
 

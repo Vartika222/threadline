@@ -8,16 +8,15 @@
  *
  * ─── WHY A GRAPH? ────────────────────────────────────────────────────────
  *
- * Naively you might sort tabs by "most similar to the previous tab".
- * That's a greedy nearest-neighbour approach — and it fails badly when
- * there are clusters. It gets trapped inside one cluster and only jumps
- * to another when it runs out of similar options.
+ * The simple alternative is a greedy walk: always go to the tab most similar
+ * to the previous one. The MST approach instead considers the GLOBAL structure
+ * of all tab relationships at once, finding the strongest set of connections
+ * that keeps all tabs reachable.
  *
- * The MST approach considers the GLOBAL structure of all tab relationships
- * at once. It finds the minimal set of connections that keeps all tabs
- * reachable, using the strongest similarity edges — so it naturally
- * groups related tabs together while finding the best bridges between
- * different topics.
+ * MEASURED: on eval/tabs.json with the real model, greedy actually scores
+ * slightly HIGHER than MST + DFS on neighbour agreement (0.595 vs 0.543 at 30
+ * tabs), because a DFS jumps back up the tree when it finishes a branch. See
+ * the Evaluation section of the README.
  *
  * ─── KRUSKAL'S ALGORITHM ─────────────────────────────────────────────────
  *
@@ -252,6 +251,24 @@ export function annotateChain(orderedIndices, simMatrix) {
       similarityToNext: nextIndex !== undefined
         ? simMatrix[tabIndex][nextIndex]
         : null,
+    };
+  });
+}
+
+/**
+ * Recomputes every tab's similarityToNext after the user reorders the chain,
+ * so each connector describes the two tabs now on either side of it.
+ *
+ * @param {Array<{originalIndex:number}>} chain - tabs in their new order
+ * @param {ArrayLike<ArrayLike<number>>} simMatrix - matrix from the same sort
+ * @returns {Array} new tab objects with similarityToNext updated
+ */
+export function reannotateChain(chain, simMatrix) {
+  return chain.map((tab, pos) => {
+    const next = chain[pos + 1];
+    return {
+      ...tab,
+      similarityToNext: next ? simMatrix[tab.originalIndex][next.originalIndex] : null,
     };
   });
 }

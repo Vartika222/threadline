@@ -451,12 +451,16 @@ export const RETRAIN_EVERY = 5;
  *
  * It compares the current example count with the count at the LAST training
  * run, instead of testing for exact counts (15, 20, 25...). A single drag can
- * add 2-4 examples at once, and a tab-switch burst adds 2 per pair, so the
+ * add 2-6 examples at once, and a tab-switch burst adds 2 per pair, so the
  * count often jumps past an exact checkpoint; testing for equality then
  * skipped training until the count happened to land on the next one.
  *
- * @param {number} total        examples stored right now
- * @param {number} trainedCount examples used by the last training run (0/undefined = never trained)
+ * Both counts must be lifetime totals (see loadExamplesSeen), not the number
+ * stored: storage is capped at 200, so a stored count stops growing and
+ * training would never run again.
+ *
+ * @param {number} total        examples ever collected
+ * @param {number} trainedCount lifetime total at the last training run (0/undefined = never trained)
  */
 export function shouldRetrain(total, trainedCount, {
   threshold = NN_ACTIVATION_THRESHOLD,
@@ -486,8 +490,11 @@ export function roundVector(vec) {
  */
 export async function storeTrainingExample(tabA, tabB, label) {
   const KEY = 'nn_training_examples';
-  const { [KEY]: existing } = await chrome.storage.local.get(KEY);
+  const { [KEY]: existing, nn_examples_seen: seen } =
+    await chrome.storage.local.get([KEY, 'nn_examples_seen']);
   const examples = existing ? JSON.parse(existing) : [];
+  // Data saved before this counter existed starts from what's stored.
+  const examplesSeen = (seen ?? examples.length) + 1;
 
   examples.push({
     embeddingA:  roundVector(tabA.embedding),
@@ -506,9 +513,21 @@ export async function storeTrainingExample(tabA, tabB, label) {
   // 7.7KB per example, so 200 examples stay around 1.5MB. The saved network
   // weights add roughly another 1.5MB of JSON.
   const trimmed = examples.slice(-200);
-  await chrome.storage.local.set({ [KEY]: JSON.stringify(trimmed) });
+  await chrome.storage.local.set({
+    [KEY]: JSON.stringify(trimmed),
+    nn_examples_seen: examplesSeen,
+  });
 
   return trimmed.length;
+}
+
+/**
+ * @returns {Promise<number>} Examples ever collected, including any since
+ *          dropped by the 200-example cap. This is what shouldRetrain compares.
+ */
+export async function loadExamplesSeen() {
+  const { nn_examples_seen: seen } = await chrome.storage.local.get('nn_examples_seen');
+  return seen ?? (await loadTrainingExamples()).length;
 }
 
 /**

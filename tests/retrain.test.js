@@ -2,13 +2,16 @@
  * tests/retrain.test.js — when does the personalisation model train?
  *
  * Regression: App.jsx used to train only when the example count was EXACTLY
- * 15, 20, 25... A single drag adds 2-4 examples, so the count often jumped
+ * 15, 20, 25... A single drag adds 2-6 examples, so the count often jumped
  * past a checkpoint (13 -> 16) and training was skipped until it happened to
  * land on the next one.
  * Run with: node tests/retrain.test.js
  */
-import { shouldRetrain, NN_ACTIVATION_THRESHOLD, RETRAIN_EVERY } from '../src/ml/nn.js';
-import { makeRunner, assert } from './helpers/chromeMock.js';
+import {
+  shouldRetrain, NN_ACTIVATION_THRESHOLD, RETRAIN_EVERY,
+  storeTrainingExample, loadTrainingExamples, loadExamplesSeen,
+} from '../src/ml/nn.js';
+import { installChromeMock, makeRunner, assert } from './helpers/chromeMock.js';
 
 const { test, section, done } = makeRunner();
 
@@ -54,6 +57,33 @@ test('simulated session: trains once per 5 new examples, whatever the step sizes
   }
   assert(trainings >= 3, `expected several trainings over ${total} examples, got ${trainings}`);
   assert(total - trainedCount < RETRAIN_EVERY, 'never more than 4 untrained examples left over');
+});
+
+section('the 200-example storage cap');
+
+const tab = { embedding: [0.1, 0.2], dwellMs: 0, revisitCount: 0, hourOfDay: 1, lastActive: 1 };
+
+test('keeps retraining after storage reaches the cap', async () => {
+  installChromeMock();
+  let trainedCount = 0, trainings = 0, lastTrainingAt = 0;
+  for (let i = 1; i <= 300; i++) {
+    await storeTrainingExample(tab, tab, i % 2);
+    const seen = await loadExamplesSeen();
+    if (shouldRetrain(seen, trainedCount)) { trainedCount = seen; trainings++; lastTrainingAt = i; }
+  }
+  assert((await loadTrainingExamples()).length === 200, 'storage stays capped at 200');
+  assert(await loadExamplesSeen() === 300, 'lifetime count keeps growing');
+  assert(lastTrainingAt === 300, `last training at example ${lastTrainingAt}, expected 300`);
+  assert(trainings === 58, `expected one training per 5 examples from 15 on, got ${trainings}`);
+});
+
+test('data saved before the lifetime counter existed keeps working', async () => {
+  const { local } = installChromeMock();
+  local.nn_training_examples = JSON.stringify(new Array(200).fill({ label: 1 }));
+  assert(await loadExamplesSeen() === 200, 'starts from the stored count');
+  await storeTrainingExample(tab, tab, 1);
+  assert(await loadExamplesSeen() === 201, 'then counts up from there');
+  assert(shouldRetrain(205, 200) === true, 'and a model trained at 200 retrains 5 later');
 });
 
 await done();

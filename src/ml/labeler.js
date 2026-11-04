@@ -124,7 +124,8 @@ export function labelClusters(tabs, clusterAssignments, options = {}) {
       return { term, score: tf[term] * idf };
     });
 
-    scored.sort((a, b) => b.score - a.score);
+    // Ties break alphabetically, so a label can't depend on tab order.
+    scored.sort((a, b) => b.score - a.score || a.term.localeCompare(b.term));
 
     const topTerms = scored.slice(0, topTermsPerCluster).map(s => titleCase(s.term));
     labels[idx] = topTerms.join(' & ');

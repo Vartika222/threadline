@@ -23,7 +23,7 @@ threadline/
 │       ├── recency.js           Recency feature + idle-time formatting
 │       └── pipeline.js          Orchestrator — runs the steps in order
 │
-├── tests/                 114 plain-Node tests; helpers/chromeMock.js fakes chrome.*
+├── tests/                 142 plain-Node tests; helpers/chromeMock.js fakes chrome.*
 ├── eval/                  Labelled tabs + chain-quality benchmark (npm run eval)
 └── scripts/               Post-build copy + build verification
 ```

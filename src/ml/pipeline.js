@@ -28,14 +28,30 @@ import {
   NN_ACTIVATION_THRESHOLD,
 } from './nn.js';
 
-export async function runMLPipeline(tabs, onProgress = () => {}) {
-  if (!tabs || tabs.length === 0) throw new Error('No tabs to sort');
+/**
+ * Puts tabs into one fixed order that doesn't depend on the tab strip.
+ *
+ * WHY: nearly every step is sensitive to input order, even when seeded. The
+ * embedding batch gives very slightly different numbers, UMAP amplifies them,
+ * and graph ties break by index. So the same tabs could get different groups
+ * and a different chain after Apply Order rearranged them.
+ */
+export function canonicalTabOrder(tabs) {
+  const compare = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+  return [...tabs].sort((a, b) =>
+    compare(a.content || '', b.content || '') || compare(a.url || '', b.url || ''));
+}
+
+export async function runMLPipeline(inputTabs, onProgress = () => {}) {
+  if (!inputTabs || inputTabs.length === 0) throw new Error('No tabs to sort');
+  const tabs = canonicalTabOrder(inputTabs);
 
   if (tabs.length === 1) {
     return {
       chain:    [{ ...tabs[0], chainPosition: 0, similarityToNext: null }],
       clusters: { [tabs[0].tabId]: 0 },
       clusterLabels: { 0: 'All Tabs' },
+      simMatrix: [[1]],
       method:   'trivial',
       implicitExampleCount: 0,
     };
@@ -123,7 +139,7 @@ export async function runMLPipeline(tabs, onProgress = () => {}) {
   // colour dots. See labeler.js for why cluster-level (not tab-level) TF-IDF.
   const clusterLabels = labelClusters(tabs, clusterAssignments);
 
-  return { chain, clusters, clusterLabels, method, implicitExampleCount: implicitCount };
+  return { chain, clusters, clusterLabels, simMatrix, method, implicitExampleCount: implicitCount };
 }
 
 /**

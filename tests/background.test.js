@@ -64,6 +64,87 @@ test('onUpdated ignores non-complete status changes', async () => {
   assert(!local.tabStore || !local.tabStore['9'], 'loading event must not create an entry');
 });
 
+section('background.js navigation');
+
+test('navigating to a different page forgets the old page text', async () => {
+  const { listeners, local } = await boot();
+  await listeners.onCreated[0]({ id: 1, title: 'Kyoto', url: 'https://a.com/kyoto' });
+  local.tabStore['1'].content = 'Kyoto is a city in Japan';
+  await listeners.onUpdated[0](1, { url: 'https://b.com/store', status: 'loading' }, { title: 'Kyoto', url: 'https://b.com/store' });
+  assert(local.tabStore['1'].content === '', 'old text must be gone once the URL changes');
+  await listeners.onUpdated[0](1, { status: 'complete' }, { title: 'Web Store', url: 'https://b.com/store' });
+  assert(local.tabStore['1'].content === 'Web Store', 'falls back to the new title');
+  assert(local.tabStore['1'].domain === 'b.com', 'domain follows the navigation');
+});
+
+test('jumping to a #fragment keeps the page text', async () => {
+  const { listeners, local } = await boot();
+  await listeners.onCreated[0]({ id: 1, title: 'Doc', url: 'https://a.com/doc' });
+  local.tabStore['1'].content = 'Page text';
+  await listeners.onUpdated[0](1, { url: 'https://a.com/doc#part-2' }, { title: 'Doc', url: 'https://a.com/doc#part-2' });
+  assert(local.tabStore['1'].content === 'Page text', 'same page, so the text stays');
+});
+
+test('a reload (no URL change) keeps the page text', async () => {
+  const { listeners, local } = await boot();
+  await listeners.onCreated[0]({ id: 1, title: 'Doc', url: 'https://a.com/doc' });
+  local.tabStore['1'].content = 'Page text';
+  await listeners.onUpdated[0](1, { status: 'complete' }, { title: 'Doc', url: 'https://a.com/doc' });
+  assert(local.tabStore['1'].content === 'Page text', 'nothing to forget');
+});
+
+section('background.js Apply Order');
+
+const applyOrder = (listeners, orderedTabIds) => new Promise(resolve =>
+  listeners.onMessage[0]({ type: 'APPLY_ORDER', orderedTabIds }, {}, resolve));
+const tabs = (...ids) => ids.map(id => ({ id, title: `T${id}`, url: `https://a.com/${id}` }));
+
+test('moves tabs into the chain order', async () => {
+  const openTabs = tabs(1, 2, 3, 4);
+  const { listeners } = await boot({ openTabs });
+  await applyOrder(listeners, [3, 1, 4, 2]);
+  assert(openTabs.map(t => t.id).join() === '3,1,4,2', `got ${openTabs.map(t => t.id)}`);
+});
+
+test('a pinned tab does not scatter the unpinned tabs', async () => {
+  const openTabs = tabs(1, 2, 3, 4);
+  openTabs[3].pinned = true; // pinned tab 4 sits last in the chain below
+  openTabs.unshift(openTabs.pop());
+  const { listeners } = await boot({ openTabs });
+  await applyOrder(listeners, [1, 2, 3, 4]);
+  assert(openTabs.map(t => t.id).join() === '4,1,2,3', `got ${openTabs.map(t => t.id)}`);
+});
+
+test('tabs outside the chain stay out of the way', async () => {
+  const openTabs = tabs(1, 2, 3, 9);
+  openTabs[3].pinned = true; // pinned, and not in the chain (say chrome://settings)
+  openTabs.unshift(openTabs.pop());
+  const { listeners } = await boot({ openTabs });
+  await applyOrder(listeners, [3, 1, 2]);
+  assert(openTabs.map(t => t.id).join() === '9,3,1,2', `got ${openTabs.map(t => t.id)}`);
+});
+
+test('a tab closed since the sort is skipped and the rest still move', async () => {
+  const openTabs = tabs(1, 2, 3, 4);
+  const { listeners } = await boot({ openTabs });
+  const reply = await applyOrder(listeners, [4, 99, 3, 2, 1]);
+  assert(openTabs.map(t => t.id).join() === '4,3,2,1', `got ${openTabs.map(t => t.id)}`);
+  assert(reply.ok === true && reply.skipped === 1, `reply was ${JSON.stringify(reply)}`);
+});
+
+test('a tab that closes during the moves does not shift the rest', async () => {
+  const openTabs = tabs(1, 2, 3, 4);
+  const { listeners } = await boot({ openTabs });
+  const realMove = chrome.tabs.move;
+  chrome.tabs.move = async (id, opts) => {
+    if (id === 3) { openTabs.splice(openTabs.findIndex(t => t.id === 3), 1); throw new Error('gone'); }
+    return realMove(id, opts);
+  };
+  const reply = await applyOrder(listeners, [4, 3, 2, 1]);
+  assert(openTabs.map(t => t.id).join() === '4,2,1', `got ${openTabs.map(t => t.id)}`);
+  assert(reply.skipped === 1, 'reports the skipped tab');
+});
+
 section('background.js activation + implicit pairs');
 
 test('switching A→B counts as a transition and bumps revisitCount', async () => {

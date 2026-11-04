@@ -48,13 +48,21 @@ export function installChromeMock({ latencyMs = 0, openTabs = [] } = {}) {
       onActivated: hook('onActivated'),
       onUpdated: hook('onUpdated'),
       sendMessage: async () => { throw new Error('no content script'); },
-      query: async () => openTabs.map(t => ({ ...t })),
+      query: async () => openTabs.map((t, index) => ({ ...t, index })),
       get: async (id) => {
         const t = openTabs.find(x => x.id === id);
         if (!t) throw new Error('No tab with id: ' + id);
         return { ...t };
       },
-      move: async () => {},
+      // Like Chrome: unknown ids throw, and pinned tabs stay ahead of unpinned.
+      move: async (id, { index }) => {
+        const from = openTabs.findIndex(t => t.id === id);
+        if (from < 0) throw new Error('No tab with id: ' + id);
+        const [tab] = openTabs.splice(from, 1);
+        const pinnedCount = openTabs.filter(t => t.pinned).length;
+        const clamped = tab.pinned ? Math.min(index, pinnedCount) : Math.max(index, pinnedCount);
+        openTabs.splice(Math.min(clamped, openTabs.length), 0, tab);
+      },
     },
     scripting: {
       executeScript: async ({ target, files }) => { injected.push({ tabId: target.tabId, files }); },
