@@ -117,7 +117,7 @@ categories, captured from their homepages:
 | --- | ---: |
 | Sites, language model alone (no known sites list) | **78 of 83 (94%)** |
 | YouTube videos by title | 22 of 22 |
-| Google searches | 8 of 9 |
+| Google searches | 9 of 9 |
 
 Treat these as optimistic. I chose the test sites, they're homepages, and I adjusted
 a description after seeing the search and video tests, which I also wrote by hand.
@@ -208,8 +208,8 @@ See [CODE_GUIDE.md](CODE_GUIDE.md) for a guided tour of the code and
   to a different address loses its protection from automatic sorting.
 - **Categories will sometimes be wrong**, especially for sites that aren't on the known
   list, and there's no way yet to correct one and have it remembered.
-- Short searches give the model little to go on: "what is photosynthesis" lands in
-  Social.
+- Short searches give the model little to go on, so a vague one can land in the wrong
+  category.
 - YouTube's category for a video is whatever the uploader picked, and is read from
   YouTube's page data, so a redesign could stop that working. Video titles would
   still be used.

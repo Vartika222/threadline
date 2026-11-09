@@ -32,7 +32,8 @@ export const CATEGORIES = [
     subcategories: {
       'Developer Tools': ['software development tools and code repositories'],
       'Business & Finance': ['business software for companies and sales teams', 'company finance, accounting and invoices'],
-      'Productivity': ['project management and team collaboration software', 'email, calendar, documents and productivity tools'],
+      'Productivity': ['project management and team collaboration software', 'email, calendar, documents and productivity tools', 'self-improvement, building good habits, motivation and personal productivity tips'],
+      'AI Tools': ['AI chatbot and assistant that answers questions, writes and codes'],
       'Jobs': ['job search, careers and hiring'],
     },
   },
@@ -121,7 +122,17 @@ export const KNOWN_SITES = {
   // Work
   'github.com': ['Work', 'Developer Tools'], 'gitlab.com': ['Work', 'Developer Tools'],
   'stackoverflow.com': ['Work', 'Developer Tools'], 'vercel.com': ['Work', 'Developer Tools'],
-  'notion.so': ['Work', 'Productivity'], 'slack.com': ['Work', 'Productivity'], 'trello.com': ['Work', 'Productivity'],
+  'notion.so': ['Work', 'Productivity'], 'notion.com': ['Work', 'Productivity'], 'notion.site': ['Work', 'Productivity'],
+  'todoist.com': ['Work', 'Productivity'], 'ticktick.com': ['Work', 'Productivity'], 'evernote.com': ['Work', 'Productivity'],
+  'obsidian.md': ['Work', 'Productivity'], 'clickup.com': ['Work', 'Productivity'], 'monday.com': ['Work', 'Productivity'],
+  'miro.com': ['Work', 'Productivity'], 'habitica.com': ['Work', 'Productivity'], 'keep.google.com': ['Work', 'Productivity'],
+  'jamesclear.com': ['Work', 'Productivity'], 'markmanson.net': ['Work', 'Productivity'], 'zenhabits.net': ['Work', 'Productivity'],
+  'lifehack.org': ['Work', 'Productivity'], 'calnewport.com': ['Work', 'Productivity'],
+  'gemini.google.com': ['Work', 'AI Tools'], 'aistudio.google.com': ['Work', 'AI Tools'], 'notebooklm.google.com': ['Work', 'AI Tools'],
+  'chatgpt.com': ['Work', 'AI Tools'], 'chat.openai.com': ['Work', 'AI Tools'], 'claude.ai': ['Work', 'AI Tools'],
+  'perplexity.ai': ['Work', 'AI Tools'], 'copilot.microsoft.com': ['Work', 'AI Tools'], 'chat.deepseek.com': ['Work', 'AI Tools'],
+  'grok.com': ['Work', 'AI Tools'], 'chat.mistral.ai': ['Work', 'AI Tools'], 'poe.com': ['Work', 'AI Tools'],
+  'meta.ai': ['Work', 'AI Tools'], 'phind.com': ['Work', 'AI Tools'], 'slack.com': ['Work', 'Productivity'], 'trello.com': ['Work', 'Productivity'],
   'asana.com': ['Work', 'Productivity'], 'atlassian.com': ['Work', 'Productivity'], 'atlassian.net': ['Work', 'Productivity'],
   'zoom.us': ['Work', 'Productivity'], 'mail.google.com': ['Work', 'Productivity'], 'docs.google.com': ['Work', 'Productivity'],
   'drive.google.com': ['Work', 'Productivity'], 'calendar.google.com': ['Work', 'Productivity'],
@@ -203,12 +214,14 @@ export const YOUTUBE_CATEGORIES = {
 };
 
 const YOUTUBE_DEFAULT = { category: 'Entertainment', subcategory: 'Streaming' };
+const LEARNING_ON_YOUTUBE = new Set(['Developer Tools', 'AI Tools']);
 const YOUTUBE_CODING = { category: 'Study', subcategory: 'Courses & Lectures' };
 
 // A page that refused to load says nothing about the site, so don't guess from it.
 const REFUSED_PAGE = /^(access (to this page has been )?denied|just a moment|attention required|are you a robot|verify you are human|403\b|404\b|page not found)/i;
 
-const SEARCH_ENGINES = /(^|\.)(google\.[a-z.]+|bing\.com|duckduckgo\.com|search\.yahoo\.com)$/;
+// The search sites themselves, not every Google site: gemini.google.com isn't a search.
+const SEARCH_ENGINES = /^(google\.[a-z.]+|bing\.com|duckduckgo\.com|search\.yahoo\.com)$/;
 
 function hostOf(url) {
   try {
@@ -332,8 +345,8 @@ export async function classifyTabs(tabs, embed, { useRules = true } = {}) {
       const closest = closestDescription(vectors[n], descriptions);
       const decision = decisions[tabIndex];
       decisions[tabIndex] = closest.score >= MIN_CONFIDENCE ? closest : (decision.defaultTo || FALLBACK);
-      // A programming video on YouTube is for learning, not a developer tool.
-      if (decision.onYouTube && decisions[tabIndex].subcategory === 'Developer Tools') decisions[tabIndex] = YOUTUBE_CODING;
+      // A video about programming or an AI tool is for learning, not the tool itself.
+      if (decision.onYouTube && LEARNING_ON_YOUTUBE.has(decisions[tabIndex].subcategory)) decisions[tabIndex] = YOUTUBE_CODING;
     });
   }
   return decisions.map(({ category, subcategory }) => ({ category, subcategory }));

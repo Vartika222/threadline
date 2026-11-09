@@ -26,6 +26,12 @@ for (const [url, category, subcategory] of [
   ['https://codolio.com/dashboard', 'Study', 'Practice & Coding Prep'],
   ['https://www.wattpad.com/', 'Entertainment', 'Reading'],
   ['https://pudding.cool/2026/11/pi/', 'News', 'General'],
+  ['https://gemini.google.com/app', 'Work', 'AI Tools'],
+  ['https://chatgpt.com/', 'Work', 'AI Tools'],
+  ['https://claude.ai/new', 'Work', 'AI Tools'],
+  ['https://www.notion.com/', 'Work', 'Productivity'],
+  ['https://www.notion.so/my-page', 'Work', 'Productivity'],
+  ['https://jamesclear.com/atomic-habits', 'Work', 'Productivity'],
 ]) {
   test(`${new URL(url).hostname} → ${category} › ${subcategory}`, () => is(classifyByRules({ url }), category, subcategory));
 }
@@ -99,6 +105,11 @@ section('searches');
 test('a Google search is judged by its query', () => {
   const decision = classifyByRules({ url: 'https://www.google.com/search?q=vogue' });
   assert(decision.useModel && decision.text === 'vogue', JSON.stringify(decision));
+});
+
+test('other Google sites are not treated as searches', () => {
+  const decision = classifyByRules({ url: 'https://sites.google.com/view/someone' });
+  assert(decision.useModel && decision.text === undefined, JSON.stringify(decision));
 });
 
 test('country Google domains count too', () => {
