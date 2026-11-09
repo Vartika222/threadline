@@ -14,12 +14,22 @@
 
 // Guard + IIFE: this file can be injected twice into the same page (once by
 // the manifest, once by background.js when the extension is installed while
-// the page is already open). Without the guard the second run would throw
-// "Identifier 'dwellStart' has already been declared" and add duplicate
-// listeners.
+// the page is already open). Without the guard the second run would add
+// duplicate listeners. A copy left over from before the extension was reloaded
+// can't reach it any more, so a new copy takes over from it.
 (function () {
-if (globalThis.__threadlineContentScriptLoaded) return;
+/** True once this copy has been cut off from the extension (it was reloaded or removed). */
+function extensionGone() {
+  try {
+    return !chrome.runtime?.id;
+  } catch {
+    return true;
+  }
+}
+
+if (globalThis.__threadlineContentScriptLoaded && !globalThis.__threadlineContentScriptGone?.()) return;
 globalThis.__threadlineContentScriptLoaded = true;
+globalThis.__threadlineContentScriptGone = extensionGone;
 
 // ─── Dwell Time Tracking ───────────────────────────────────────────────────
 
@@ -42,15 +52,16 @@ function stopDwell() {
 
 startDwell();
 
-document.addEventListener('visibilitychange', () => {
+function onVisibilityChange() {
   if (document.hidden) {
     stopDwell();
   } else {
     startDwell();
     notifyBackground();
   }
-});
+}
 
+document.addEventListener('visibilitychange', onVisibilityChange);
 window.addEventListener('focus', startDwell);
 window.addEventListener('blur', stopDwell);
 
@@ -194,17 +205,36 @@ function withTabData(callback) {
 }
 
 function notifyBackground() {
+  if (extensionGone()) {
+    stopListening();
+    return;
+  }
   withTabData(sendToBackground);
 }
 
 function sendToBackground(data) {
-  chrome.runtime.sendMessage({
-    type: 'TAB_DATA_UPDATE',
-    payload: data
-  }).catch(() => {
-    // Background service worker may be sleeping — that's fine, it'll
-    // ask for data when it wakes up
-  });
+  try {
+    chrome.runtime.sendMessage({ type: 'TAB_DATA_UPDATE', payload: data }).catch(() => {
+      // The service worker may be asleep: it asks for data when it wakes up.
+    });
+  } catch {
+    // Chrome throws straight away, rather than rejecting, once the extension
+    // has been reloaded. This copy is finished; the new one does the work.
+    stopListening();
+  }
+}
+
+function onYouTubeNavigate() {
+  setTimeout(notifyBackground, 1000);
+}
+
+/** Detaches this copy from the page, so a leftover copy goes quiet. */
+function stopListening() {
+  stopDwell();
+  document.removeEventListener('visibilitychange', onVisibilityChange);
+  document.removeEventListener('yt-navigate-finish', onYouTubeNavigate);
+  window.removeEventListener('focus', startDwell);
+  window.removeEventListener('blur', stopDwell);
 }
 
 // Listen for background asking for fresh data
@@ -219,5 +249,5 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 setTimeout(notifyBackground, 1000); // Wait 1s for page to settle
 
 // YouTube changes video without loading a new page, so this script doesn't rerun.
-document.addEventListener('yt-navigate-finish', () => setTimeout(notifyBackground, 1000));
+document.addEventListener('yt-navigate-finish', onYouTubeNavigate);
 })();
