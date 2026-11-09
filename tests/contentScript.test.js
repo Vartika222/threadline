@@ -46,7 +46,11 @@ function loadPage({ elements = [], hidden = false, href = 'https://example.com/'
   let now = 0;
   const docListeners = {};
   const winListeners = {};
+  const listen = (store) => (type, fn) => { (store[type] ||= new Set()).add(fn); };
+  const unlisten = (store) => (type, fn) => { store[type]?.delete(fn); };
+  const fire = (store, type) => { for (const fn of [...(store[type] || [])]) fn(); };
   let onMessage;
+  const sent = [];
 
   class FakeDate extends Date {
     constructor() { super(now); }
@@ -57,16 +61,22 @@ function loadPage({ elements = [], hidden = false, href = 'https://example.com/'
     title: 'Page title',
     querySelector: (selector) => (selector in meta ? { content: meta[selector] } : null),
     querySelectorAll: (selector) => el('body', ...elements).querySelectorAll(selector),
-    addEventListener: (type, fn) => { docListeners[type] = fn; },
+    addEventListener: listen(docListeners),
+    removeEventListener: unlisten(docListeners),
   };
   const window = {
     location: { href, hostname: new URL(href).hostname },
-    addEventListener: (type, fn) => { winListeners[type] = fn; },
+    addEventListener: listen(winListeners),
+    removeEventListener: unlisten(winListeners),
   };
-  vm.runInNewContext(source, {
-    document, window, Date: FakeDate, Array, URL, fetch, setTimeout: () => {},
-    chrome: { runtime: { sendMessage: () => Promise.resolve(), onMessage: { addListener: fn => { onMessage = fn; } } } },
-  });
+  const chrome = { runtime: {
+    id: 'threadline',
+    sendMessage: (message) => { sent.push(message); return Promise.resolve(); },
+    onMessage: { addListener: fn => { onMessage = fn; } },
+  } };
+  const context = vm.createContext({ document, window, Date: FakeDate, Array, URL, fetch, chrome, setTimeout: () => {} });
+  const inject = () => vm.runInContext(source, context);
+  inject();
 
   const request = () => {
     let reply;
@@ -77,10 +87,14 @@ function loadPage({ elements = [], hidden = false, href = 'https://example.com/'
     request: () => new Promise(resolve => onMessage({ type: 'REQUEST_TAB_DATA' }, {}, resolve)),
     go: (url) => { window.location.href = url; },
     at: (ms) => { now = ms; },
-    hide: () => { document.hidden = true; docListeners.visibilitychange(); },
-    show: () => { document.hidden = false; docListeners.visibilitychange(); },
-    blur: () => winListeners.blur(),
-    focus: () => winListeners.focus(),
+    hide: () => { document.hidden = true; fire(docListeners, 'visibilitychange'); },
+    show: () => { document.hidden = false; fire(docListeners, 'visibilitychange'); },
+    blur: () => fire(winListeners, 'blur'),
+    focus: () => fire(winListeners, 'focus'),
+    inject,
+    chrome,
+    sent,
+    listenerCount: () => [docListeners, winListeners].flatMap(store => Object.values(store)).reduce((n, set) => n + set.size, 0),
     dwell: () => request().dwellMs,
     content: () => request().content,
   };
@@ -218,6 +232,40 @@ test('a failed lookup still sends the page, and is tried again later', async () 
 test('other sites never fetch anything', async () => {
   const page = loadPage({ fetch: async () => { throw new Error('should not fetch'); } });
   assert((await page.request()).youtubeCategory === undefined, 'no category');
+});
+
+section('after the extension is reloaded');
+
+/** What Chrome does to a page's old copy when the extension is reloaded. */
+const cutOff = (page) => {
+  delete page.chrome.runtime.id;
+  page.chrome.runtime.sendMessage = () => { throw new Error('Extension context invalidated.'); };
+};
+
+test('a leftover copy goes quiet instead of throwing', () => {
+  const page = loadPage();
+  cutOff(page);
+  page.hide();
+  page.show(); // would send page data, and used to throw "Extension context invalidated"
+  assert(page.listenerCount() === 0, `${page.listenerCount()} listeners left`);
+});
+
+test('a second copy does nothing while the first is still connected', () => {
+  const page = loadPage();
+  const before = page.listenerCount();
+  page.inject();
+  assert(page.listenerCount() === before, `${page.listenerCount()} vs ${before}`);
+});
+
+test('after a reload, page data still reaches the extension', () => {
+  const page = loadPage();
+  cutOff(page);
+  page.chrome.runtime.id = 'threadline-reloaded'; // the new copy's connection
+  page.chrome.runtime.sendMessage = (message) => { page.sent.push(message); return Promise.resolve(); };
+  page.inject();
+  page.hide();
+  page.show();
+  assert(page.sent.length > 0, 'the new copy sends page data');
 });
 
 done();
