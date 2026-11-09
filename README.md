@@ -48,18 +48,19 @@ Chrome Web Store.
    related tabs. That chain is built from the best of a maximum spanning tree walked
    depth-first and a greedy walk, polished by local search. **Undo** restores the
    previous arrangement.
-5. **Focus mode.** Pick a category and a duration, and the other groups collapse.
-   Opening another category shows `!` on the badge, or with strict focus enabled,
-   a "Back to Study" page offering **Allow this site** and **End focus**. Tabs marked
-   Unsure are never blocked. There's no screen for this yet. In the service worker
-   console:
-
-   ```js
-   threadline.startFocus('Study', 50)
-   threadline.setStrictFocus(true)   // off by default
-   threadline.endFocus()
-   ```
-6. **Personalise (optional, off by default).** Tick **Personalise sorting
+5. **Focus timer.** In the popup's **Focus** page, pick a category and a duration
+   (25, 50, 90 or any number of minutes) and click **Start focus**. It never starts on
+   its own. The other groups collapse and the icon counts down the minutes. Opening
+   another category shows `!` on the icon, or, with **Strict** ticked, a "Back to
+   Study" page offering **Allow this site** and **End focus**. Tabs marked Unsure are
+   never blocked. Ending a strict session early takes two clicks.
+6. **Snapshots.** In the popup's **Snapshots** page, **Save** keeps this window's tabs
+   in their order and groups, including anything arranged by hand (**↓ Save** in the
+   header does the same without a name). **Restore** puts the tabs back, reopens any
+   that were closed, and recreates the groups; automatic sorting then leaves those
+   tabs where they are until they navigate somewhere new. **Undo** reverses a
+   restore. The last 20 snapshots are kept.
+7. **Personalise (optional, off by default).** Tick **Personalise sorting
    (experimental)** in the popup and Threadline learns from your drags and from
    switching back and forth between two tabs. This only affects the order inside a
    subcategory, and it hasn't been shown to help (see Evaluation).
@@ -203,7 +204,8 @@ See [CODE_GUIDE.md](CODE_GUIDE.md) for a guided tour of the code and
 
 - Personalisation is off by default and hasn't been shown to help (see
   Evaluation).
-- Focus mode has no screen yet, only service worker console commands.
+- Snapshots restore into the current window only, and a restored tab that redirects
+  to a different address loses its protection from automatic sorting.
 - **Categories will sometimes be wrong**, especially for sites that aren't on the known
   list, and there's no way yet to correct one and have it remembered.
 - Short searches give the model little to go on: "what is photosynthesis" lands in

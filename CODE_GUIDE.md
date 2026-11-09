@@ -185,6 +185,13 @@ descriptions, because dmoz has no social or streaming labels (`training/README.m
   restart. `enforceFocus` runs on tab activation and after sorting. Strict focus is opt-in,
   Unsure tabs are never blocked, and the blocked page can always allow a site or end
   focus, because the classifier will be wrong sometimes.
+  The popup's `FocusPanel.jsx` starts and ends it through `START_FOCUS`, `END_FOCUS`,
+  `GET_FOCUS` and `SET_STRICT_FOCUS`; it never starts on its own.
+- **Snapshots** (`saveSnapshot`, `restoreSnapshot`) keep a window's tabs in order with
+  their groups. Restoring matches saved tabs to open ones by address, reopens the rest,
+  regroups them, and marks their placements `manual: true`: `runAutoSort` still learns
+  their category but doesn't move them until they navigate elsewhere. It saves Undo
+  state first. The popup's `SnapshotsPanel.jsx` lists, restores and deletes them.
 
 ### 4e. `recency.js` — "how long since this tab was touched" *(new)*
 
@@ -350,7 +357,7 @@ and the `chrome.tabs` event hooks, plus the small runner the newer files use.
 |---|---|
 | `graph.test.js` | MST has N-1 edges, DFS visits every node once, `buildChainOrder` returns every tab once and is at least as strong as MST or greedy alone, local search never lowers the total, 200 tabs finish in under a second |
 | `categories.test.js` | The rules with no model: your tabs, YouTube homepage vs video vs study channel, searches by query, block pages, known sites naming real categories |
-| `sorting.test.js` | Automatic grouping, tabs moved by hand staying put, user groups left alone, retries during drags, Sort now, Undo, focus mode in gentle and strict form |
+| `sorting.test.js` | Automatic grouping, tabs moved by hand staying put, user groups left alone, retries during drags, Sort now, Undo, focus mode in gentle and strict form, snapshots: save, restore (order, groups, reopening), kept out of automatic sorting, Undo, delete |
 | `retrain.test.js` | `shouldRetrain`: trains at 15, still triggers when the count jumps past a checkpoint (13 → 16), waits for 5 new examples between trainings, keeps training past the 200-example storage cap |
 | `personalise.test.js` | Off by default; with no adjustment it equals cosine; always symmetric and on the 0-1 scale; training moves scores the right way, is deterministic and fast; inconsistent corrections stay near cosine |
 | `embedder.test.js` | The real bundled model loads with no network, gives unit-length 384-dim vectors, ranks related text above unrelated, survives blank text |

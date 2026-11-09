@@ -509,8 +509,10 @@ async function runAutoSort() {
 
     await saveUndoState(tabs.map(tab => tab.windowId));
     for (let i = 0; i < tabs.length; i++) {
-      placements[tabs[i].id] = { url: withoutHash(tabs[i].url), basis: sortBasis(store, tabs[i]), ...results[i] };
-      await placeTabInGroup(tabs[i], results[i], managed, placements);
+      // A tab put in place by a snapshot keeps its spot until it navigates away.
+      const manual = placements[tabs[i].id]?.manual && placements[tabs[i].id].url === withoutHash(tabs[i].url);
+      placements[tabs[i].id] = { url: withoutHash(tabs[i].url), basis: sortBasis(store, tabs[i]), ...results[i], ...(manual && { manual }) };
+      if (!manual) await placeTabInGroup(tabs[i], results[i], managed, placements);
     }
     await savePlacements(placements);
 
@@ -666,7 +668,7 @@ async function undoLastSort() {
 async function showTabCategoryOnBadge(tabId) {
   if (await loadFocus()) return;
   const placement = (await loadPlacements())[tabId];
-  if (!placement) {
+  if (!placement?.category) {
     await chrome.action.setBadgeText({ tabId, text: '' });
     return;
   }
@@ -761,7 +763,7 @@ async function enforceFocus(tabId) {
   } catch {
     return;
   }
-  if (!placement || !/^https?:/.test(tab.url || '') || placement.url !== withoutHash(tab.url)) return;
+  if (!placement?.category || !/^https?:/.test(tab.url || '') || placement.url !== withoutHash(tab.url)) return;
 
   const onTask = placement.category === focus.category || placement.subcategory === 'Unsure'
     || focus.allowedHosts.includes(safeHostname(tab.url));
@@ -806,7 +808,122 @@ chrome.alarms.onAlarm.addListener(async ({ name }) => {
   }
 });
 
-// Reachable from the service worker console until focus mode has screens.
+// ─── Snapshots ────────────────────────────────────────────────────────────
+//
+// A snapshot keeps a window's tabs in their order, with their groups, so an
+// arrangement made by hand can be brought back. Restoring reuses tabs that are
+// still open, reopens the rest, and marks them so automatic sorting doesn't
+// move them again until they navigate somewhere new. Undo reverses a restore.
+
+const SNAPSHOTS_KEY = 'snapshots';
+const MAX_SNAPSHOTS = 20;
+
+async function loadSnapshots() {
+  const { [SNAPSHOTS_KEY]: snapshots } = await chrome.storage.local.get(SNAPSHOTS_KEY);
+  return snapshots || [];
+}
+
+function defaultSnapshotName(time) {
+  return new Date(time).toLocaleString(undefined, { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+}
+
+async function saveSnapshot(name) {
+  const tabs = (await chrome.tabs.query({ currentWindow: true })).sort((a, b) => a.index - b.index);
+  const groups = tabs.length ? await chrome.tabGroups.query({ windowId: tabs[0].windowId }) : [];
+  const createdAt = Date.now();
+  const snapshot = {
+    id: createdAt,
+    name: (name || '').trim() || defaultSnapshotName(createdAt),
+    createdAt,
+    tabs: tabs.map(tab => ({
+      url: tab.url || tab.pendingUrl || '',
+      title: tab.title || '',
+      pinned: Boolean(tab.pinned),
+      group: tab.groupId !== undefined && tab.groupId !== -1 ? tab.groupId : null,
+    })),
+    groups: groups.map(group => ({ id: group.id, title: group.title || '', color: group.color, collapsed: Boolean(group.collapsed) })),
+  };
+  await withStoreLock(async () => {
+    const snapshots = await loadSnapshots();
+    await chrome.storage.local.set({ [SNAPSHOTS_KEY]: [snapshot, ...snapshots].slice(0, MAX_SNAPSHOTS) });
+  });
+  return { ok: true, snapshot };
+}
+
+async function deleteSnapshot(id) {
+  await withStoreLock(async () => {
+    const snapshots = await loadSnapshots();
+    await chrome.storage.local.set({ [SNAPSHOTS_KEY]: snapshots.filter(snapshot => snapshot.id !== id) });
+  });
+  return { ok: true };
+}
+
+/** Pages a tab can't be opened on by an extension. */
+const canReopen = (url) => /^(https?|file|ftp):/.test(url || '') || url === 'chrome://newtab/';
+
+async function restoreSnapshot(id) {
+  const snapshot = (await loadSnapshots()).find(entry => entry.id === id);
+  if (!snapshot) return { error: 'That snapshot no longer exists' };
+
+  const windowTabs = await chrome.tabs.query({ currentWindow: true });
+  const windowId = windowTabs[0]?.windowId;
+  await saveUndoState([windowId]);
+
+  // Match each saved tab to an open one with the same page, each used once.
+  const unused = new Map();
+  for (const tab of windowTabs) {
+    const key = withoutHash(tab.url || tab.pendingUrl);
+    if (!unused.has(key)) unused.set(key, []);
+    unused.get(key).push(tab);
+  }
+  const restored = []; // { tabId, saved }
+  let reopened = 0;
+  let skipped = 0;
+  for (const saved of snapshot.tabs) {
+    const match = unused.get(withoutHash(saved.url))?.shift();
+    if (match) {
+      restored.push({ tabId: match.id, saved });
+    } else if (canReopen(saved.url)) {
+      const tab = await chrome.tabs.create({ url: saved.url, windowId, active: false, pinned: saved.pinned });
+      restored.push({ tabId: tab.id, saved });
+      reopened++;
+    } else {
+      skipped++;
+    }
+  }
+
+  const grouped = restored.map(entry => entry.tabId).filter(tabId => {
+    const tab = windowTabs.find(open => open.id === tabId);
+    return tab && tab.groupId !== undefined && tab.groupId !== -1;
+  });
+  if (grouped.length) await editTabs(() => chrome.tabs.ungroup(grouped));
+  for (const { tabId, saved } of restored) {
+    const tab = windowTabs.find(open => open.id === tabId);
+    if (tab && Boolean(tab.pinned) !== saved.pinned) await editTabs(() => chrome.tabs.update(tabId, { pinned: saved.pinned }));
+  }
+  await applyTabOrder(restored.map(entry => entry.tabId));
+
+  for (const group of snapshot.groups || []) {
+    const tabIds = restored.filter(entry => entry.saved.group === group.id && !entry.saved.pinned).map(entry => entry.tabId);
+    if (tabIds.length === 0) continue;
+    const groupId = await editTabs(() => chrome.tabs.group({ tabIds, createProperties: { windowId } }));
+    await editTabs(() => chrome.tabGroups.update(groupId, { title: group.title, color: group.color, collapsed: group.collapsed }));
+  }
+
+  // Keep the arrangement: automatic sorting still learns each tab's category,
+  // for the badge and focus mode, but leaves the tab where it is.
+  await withStoreLock(async () => {
+    const placements = await loadPlacements();
+    for (const { tabId, saved } of restored) {
+      placements[tabId] = { ...placements[tabId], url: withoutHash(saved.url), manual: true };
+    }
+    await savePlacements(placements);
+  });
+  scheduleAutoSort();
+  return { ok: true, restored: restored.length, reopened, skipped };
+}
+
+// Reachable from the service worker console as well as the popup.
 globalThis.threadline = {
   startFocus,
   endFocus,
@@ -814,6 +931,8 @@ globalThis.threadline = {
   getFocus: loadFocus,
   runAutoSort,
   undoLastSort,
+  saveSnapshot,
+  restoreSnapshot,
 };
 
 // ─── Message Handlers (from popup and content scripts) ────────────────────
@@ -951,27 +1070,17 @@ async function handleMessage(message, sender) {
     case 'FOCUS_GO_BACK':
       return leaveBlockedPage(sender.tab?.id);
 
-    case 'SAVE_SNAPSHOT': {
-      // Save current tab state as a named session
-      const tabs = await chrome.tabs.query({ currentWindow: true });
-      const snapshot = {
-        id: Date.now(),
-        name: message.name || `Session ${new Date().toLocaleTimeString()}`,
-        createdAt: Date.now(),
-        tabs: tabs.map(t => ({ url: t.url, title: t.title, index: t.index }))
-      };
-      await withStoreLock(async () => {
-        const existing = (await chrome.storage.local.get('snapshots')).snapshots || [];
-        existing.unshift(snapshot);
-        await chrome.storage.local.set({ snapshots: existing.slice(0, 10) }); // Keep last 10
-      });
-      return { ok: true, snapshot };
-    }
+    case 'SAVE_SNAPSHOT':
+      return saveSnapshot(message.name);
 
-    case 'GET_SNAPSHOTS': {
-      const { snapshots } = await chrome.storage.local.get('snapshots');
-      return { snapshots: snapshots || [] };
-    }
+    case 'GET_SNAPSHOTS':
+      return { snapshots: await loadSnapshots() };
+
+    case 'RESTORE_SNAPSHOT':
+      return restoreSnapshot(message.id);
+
+    case 'DELETE_SNAPSHOT':
+      return deleteSnapshot(message.id);
 
     default:
       return { error: `Unknown message type: ${message.type}` };

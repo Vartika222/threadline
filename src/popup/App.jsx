@@ -2,7 +2,8 @@
  * THREADLINE — App.jsx
  *
  * The popup UI. Three views:
- *   'idle'    → default, shows current tabs + Sort button
+ *   'idle'    → default: pages for the tabs and Sort button, the focus timer,
+ *               and snapshots
  *   'sorting' → ML pipeline running, shows progress
  *   'sorted'  → shows the relatability chain, apply button
  *
@@ -18,6 +19,8 @@
 import React, { useState, useEffect } from 'react';
 import TabChain, { CLUSTER_COLORS } from './TabChain.jsx';
 import SortButton from './SortButton.jsx';
+import FocusPanel from './FocusPanel.jsx';
+import SnapshotsPanel from './SnapshotsPanel.jsx';
 import { runMLPipeline } from '../ml/pipeline.js';
 import { deriveTrainingPairs } from '../ml/feedback.js';
 import { reannotateChain } from '../ml/graph.js';
@@ -36,6 +39,8 @@ import {
 
 export default function App() {
   const [view, setView] = useState('idle');
+  const [page, setPage] = useState('tabs'); // inside the idle view
+  const [savedNote, setSavedNote] = useState(false);
   const [tabs, setTabs] = useState([]);
   const [sortedChain, setSortedChain] = useState([]);
   const [clusters, setClusters] = useState({});
@@ -182,7 +187,13 @@ export default function App() {
 
   async function handleSnapshot() {
     await chrome.runtime.sendMessage({ type: 'SAVE_SNAPSHOT', name: null });
-    // Show brief confirmation (TODO: toast notification)
+    setSavedNote(true);
+    setTimeout(() => setSavedNote(false), 1500);
+  }
+
+  function handleRestored() {
+    setCanUndo(true);
+    loadTabs();
   }
 
   return (
@@ -193,8 +204,8 @@ export default function App() {
           <span className="logo-mark">⬡</span>
           <span className="logo-text">Threadline</span>
         </div>
-        <button className="snapshot-btn" onClick={handleSnapshot} title="Save session snapshot">
-          ↓ Save
+        <button className="snapshot-btn" onClick={handleSnapshot} title="Save this window's tabs, order and groups">
+          {savedNote ? 'Saved ✓' : '↓ Save'}
         </button>
       </header>
 
@@ -202,6 +213,25 @@ export default function App() {
       <main className="main">
 
         {view === 'idle' && (
+          <nav className="page-tabs">
+            {[['tabs', 'Tabs'], ['focus', 'Focus'], ['snapshots', 'Snapshots']].map(([id, label]) => (
+              <button key={id} className={`page-tab ${page === id ? 'page-tab-on' : ''}`} onClick={() => setPage(id)}>
+                {label}
+              </button>
+            ))}
+          </nav>
+        )}
+
+        {view === 'idle' && page === 'focus' && <FocusPanel />}
+
+        {view === 'idle' && page === 'snapshots' && (
+          <>
+            <SnapshotsPanel onRestored={handleRestored} />
+            {canUndo && <button className="cancel-btn wide" onClick={handleUndo}>Undo</button>}
+          </>
+        )}
+
+        {view === 'idle' && page === 'tabs' && (
           <div className="idle-view">
             <div className="tab-count">
               {tabs.length} tabs open

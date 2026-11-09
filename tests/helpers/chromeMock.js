@@ -67,8 +67,14 @@ export function installChromeMock({ latencyMs = 0, openTabs = [], classifier = n
       // Like Chrome: unknown ids throw, and pinned tabs stay ahead of unpinned.
       group: async ({ tabIds, groupId, createProperties }) => {
         const id = groupId ?? nextGroupId++;
-        if (groupId === undefined) groups.push({ id, windowId: createProperties?.windowId ?? 1, title: '', color: 'grey', collapsed: false });
+        if (groupId === undefined) {
+          groups.push({ id, windowId: createProperties?.windowId ?? 1, title: '', color: 'grey', collapsed: false });
+          // A new group starts where its first tab already is, like Chrome.
+          const first = openTabs.find(t => t.id === [].concat(tabIds)[0]);
+          if (first) first.groupId = id;
+        }
         for (const tabId of tabIds) {
+          if (groupId === undefined && tabId === [].concat(tabIds)[0] && openTabs.some(t => t.id === tabId)) continue;
           const tab = openTabs.find(t => t.id === tabId);
           if (!tab) throw new Error('No tab with id: ' + tabId);
           tab.groupId = id;
@@ -92,6 +98,12 @@ export function installChromeMock({ latencyMs = 0, openTabs = [], classifier = n
         if (props.active) for (const t of openTabs) t.active = false;
         Object.assign(tab, props);
         return { ...tab };
+      },
+      create: async ({ url, pinned = false, active = false }) => {
+        const tab = { id: Math.max(0, ...openTabs.map(t => t.id)) + 1, url, title: '', pinned, active, status: 'loading' };
+        const at = pinned ? openTabs.filter(t => t.pinned).length : openTabs.length;
+        openTabs.splice(at, 0, tab);
+        return { windowId: 1, groupId: -1, ...tab };
       },
       remove: async (id) => {
         const i = openTabs.findIndex(t => t.id === id);
