@@ -107,17 +107,20 @@ chrome.storage.local.get('implicit_training_candidates', d => console.log(d))
 
 ## 7. Other checks
 
-- **Focus mode:** in the service worker console, run `threadline.startFocus('Study', 5)`.
-  Other groups collapse and the badge shows `5m`. Click a tab in another group and the
-  badge shows `!`. Run `threadline.setStrictFocus(true)`, click one again, and you get
-  a "Back to Study" page. Run `threadline.endFocus()` when done.
+- **Focus timer:** in the popup, open **Focus**, pick Study and 5 minutes, and click
+  **Start focus**. Other groups collapse and the badge shows `5m`. Click a tab in
+  another group and the badge shows `!`. End it, start again with **Strict** ticked,
+  click another group's tab, and you get a "Back to Study" page. **End focus** asks
+  for a second click in strict mode.
 - **Automatic sorting off:** untick **Sort tabs automatically** in the popup, then open
   a tab. It should stay where it is.
 - **Your own groups:** make a tab group yourself with another name. It should be left
   alone.
-- **Save snapshot:** click **↓ Save** in the popup, then run in the service
-  worker console: `chrome.storage.local.get('snapshots', console.log)`. Expect
-  one snapshot with your tab list. (There is no screen to view snapshots yet.)
+- **Snapshots:** arrange some tabs by hand (make a group of your own too), open
+  **Snapshots** in the popup and click **Save**. Shuffle the tabs, ungroup them and
+  close one, then click **Restore**: the order and groups come back and the closed tab
+  reopens. Wait a few seconds: automatic sorting should not move them. **Undo**
+  reverses the restore.
 - **Service worker restart:** on `chrome://extensions` click the card's reload
   icon, switch between two tabs, and confirm nothing errors.
 - **Reset everything:** in the service worker console, run

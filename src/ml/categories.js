@@ -5,6 +5,7 @@
  *
  *   1. Mixed sites (YouTube, search engines) are judged by what's open in the
  *      tab, because the site alone says nothing about the content.
+ *      A YouTube video goes by its channel, then by the category YouTube lists.
  *   2. Known sites come from a hand-made list. Fast, and needs no model.
  *   3. Anything else is compared with written descriptions of each subcategory,
  *      using the language model, and takes the closest match. If nothing is
@@ -31,7 +32,8 @@ export const CATEGORIES = [
     subcategories: {
       'Developer Tools': ['software development tools and code repositories'],
       'Business & Finance': ['business software for companies and sales teams', 'company finance, accounting and invoices'],
-      'Productivity': ['project management and team collaboration software', 'email, calendar, documents and productivity tools'],
+      'Productivity': ['project management and team collaboration software', 'email, calendar, documents and productivity tools', 'self-improvement, building good habits, motivation and personal productivity tips'],
+      'AI Tools': ['AI chatbot and assistant that answers questions, writes and codes'],
       'Jobs': ['job search, careers and hiring'],
     },
   },
@@ -41,6 +43,7 @@ export const CATEGORIES = [
       'Streaming': ['watch movies, TV shows and web series online', 'video streaming service', 'anime and live streams', 'celebrity gossip, comedy and funny videos'],
       'Music': ['listen to music, songs and podcasts', 'official music video and song'],
       'Sports': ['live sports scores, cricket and football'],
+      'Reading': ['read stories, novels, fan fiction and webcomics online'],
     },
   },
   {
@@ -112,12 +115,24 @@ export const KNOWN_SITES = {
   'geeksforgeeks.org': ['Study', 'Practice & Coding Prep'], 'codecademy.com': ['Study', 'Practice & Coding Prep'],
   'w3schools.com': ['Study', 'Practice & Coding Prep'], 'codechef.com': ['Study', 'Practice & Coding Prep'],
   'codeforces.com': ['Study', 'Practice & Coding Prep'], 'quizlet.com': ['Study', 'Practice & Coding Prep'],
+  'codolio.com': ['Study', 'Practice & Coding Prep'], 'takeuforward.org': ['Study', 'Practice & Coding Prep'],
+  'interviewbit.com': ['Study', 'Practice & Coding Prep'],
   'wikipedia.org': ['Study', 'Reference'], 'britannica.com': ['Study', 'Reference'],
   'arxiv.org': ['Study', 'Science'], 'nature.com': ['Study', 'Science'], 'scholar.google.com': ['Study', 'Science'],
   // Work
   'github.com': ['Work', 'Developer Tools'], 'gitlab.com': ['Work', 'Developer Tools'],
   'stackoverflow.com': ['Work', 'Developer Tools'], 'vercel.com': ['Work', 'Developer Tools'],
-  'notion.so': ['Work', 'Productivity'], 'slack.com': ['Work', 'Productivity'], 'trello.com': ['Work', 'Productivity'],
+  'notion.so': ['Work', 'Productivity'], 'notion.com': ['Work', 'Productivity'], 'notion.site': ['Work', 'Productivity'],
+  'todoist.com': ['Work', 'Productivity'], 'ticktick.com': ['Work', 'Productivity'], 'evernote.com': ['Work', 'Productivity'],
+  'obsidian.md': ['Work', 'Productivity'], 'clickup.com': ['Work', 'Productivity'], 'monday.com': ['Work', 'Productivity'],
+  'miro.com': ['Work', 'Productivity'], 'habitica.com': ['Work', 'Productivity'], 'keep.google.com': ['Work', 'Productivity'],
+  'jamesclear.com': ['Work', 'Productivity'], 'markmanson.net': ['Work', 'Productivity'], 'zenhabits.net': ['Work', 'Productivity'],
+  'lifehack.org': ['Work', 'Productivity'], 'calnewport.com': ['Work', 'Productivity'],
+  'gemini.google.com': ['Work', 'AI Tools'], 'aistudio.google.com': ['Work', 'AI Tools'], 'notebooklm.google.com': ['Work', 'AI Tools'],
+  'chatgpt.com': ['Work', 'AI Tools'], 'chat.openai.com': ['Work', 'AI Tools'], 'claude.ai': ['Work', 'AI Tools'],
+  'perplexity.ai': ['Work', 'AI Tools'], 'copilot.microsoft.com': ['Work', 'AI Tools'], 'chat.deepseek.com': ['Work', 'AI Tools'],
+  'grok.com': ['Work', 'AI Tools'], 'chat.mistral.ai': ['Work', 'AI Tools'], 'poe.com': ['Work', 'AI Tools'],
+  'meta.ai': ['Work', 'AI Tools'], 'phind.com': ['Work', 'AI Tools'], 'slack.com': ['Work', 'Productivity'], 'trello.com': ['Work', 'Productivity'],
   'asana.com': ['Work', 'Productivity'], 'atlassian.com': ['Work', 'Productivity'], 'atlassian.net': ['Work', 'Productivity'],
   'zoom.us': ['Work', 'Productivity'], 'mail.google.com': ['Work', 'Productivity'], 'docs.google.com': ['Work', 'Productivity'],
   'drive.google.com': ['Work', 'Productivity'], 'calendar.google.com': ['Work', 'Productivity'],
@@ -129,6 +144,9 @@ export const KNOWN_SITES = {
   'primevideo.com': ['Entertainment', 'Streaming'], 'hulu.com': ['Entertainment', 'Streaming'],
   'disneyplus.com': ['Entertainment', 'Streaming'], 'sonyliv.com': ['Entertainment', 'Streaming'],
   'zee5.com': ['Entertainment', 'Streaming'], 'crunchyroll.com': ['Entertainment', 'Streaming'],
+  'wattpad.com': ['Entertainment', 'Reading'], 'webtoons.com': ['Entertainment', 'Reading'],
+  'archiveofourown.org': ['Entertainment', 'Reading'], 'fanfiction.net': ['Entertainment', 'Reading'],
+  'royalroad.com': ['Entertainment', 'Reading'], 'pratilipi.com': ['Entertainment', 'Reading'],
   'twitch.tv': ['Entertainment', 'Streaming'], 'imdb.com': ['Entertainment', 'Streaming'],
   'spotify.com': ['Entertainment', 'Music'], 'gaana.com': ['Entertainment', 'Music'],
   'jiosaavn.com': ['Entertainment', 'Music'], 'music.youtube.com': ['Entertainment', 'Music'],
@@ -156,7 +174,7 @@ export const KNOWN_SITES = {
   'behance.net': ['Shopping & Art', 'Art & Design'], 'dribbble.com': ['Shopping & Art', 'Art & Design'], 'artstation.com': ['Shopping & Art', 'Art & Design'],
   'deviantart.com': ['Shopping & Art', 'Art & Design'], 'moma.org': ['Shopping & Art', 'Art & Design'],
   // News
-  'bbc.com': ['News', 'General'], 'bbc.co.uk': ['News', 'General'], 'nytimes.com': ['News', 'General'], 'theguardian.com': ['News', 'General'],
+  'pudding.cool': ['News', 'General'], 'bbc.com': ['News', 'General'], 'bbc.co.uk': ['News', 'General'], 'nytimes.com': ['News', 'General'], 'theguardian.com': ['News', 'General'],
   'reuters.com': ['News', 'General'], 'thehindu.com': ['News', 'General'], 'ndtv.com': ['News', 'General'],
   'indiatimes.com': ['News', 'General'], 'indianexpress.com': ['News', 'General'], 'cnn.com': ['News', 'General'], 'aljazeera.com': ['News', 'General'],
   // Life & Other
@@ -176,10 +194,34 @@ export const STUDY_CHANNELS = new Set([
   'the organic chemistry tutor', 'professor leonard', 'traversy media', 'programming with mosh', 'fireship',
 ]);
 
+/**
+ * YouTube's own category for a video, as the uploader chose it, read from the
+ * video's page. Categories missing here (People & Blogs, Science & Technology,
+ * Howto & Style, ...) cover too many kinds of video, so the model decides those.
+ */
+export const YOUTUBE_CATEGORIES = {
+  'Education': { category: 'Study', subcategory: 'Courses & Lectures' },
+  'Music': { category: 'Entertainment', subcategory: 'Music' },
+  'Gaming': { category: 'Games', subcategory: 'Gaming News' },
+  'Sports': { category: 'Entertainment', subcategory: 'Sports' },
+  'News & Politics': { category: 'News', subcategory: 'General' },
+  'Film & Animation': { category: 'Entertainment', subcategory: 'Streaming' },
+  'Comedy': { category: 'Entertainment', subcategory: 'Streaming' },
+  'Entertainment': { category: 'Entertainment', subcategory: 'Streaming' },
+  'Shows': { category: 'Entertainment', subcategory: 'Streaming' },
+  'Trailers': { category: 'Entertainment', subcategory: 'Streaming' },
+  'Movies': { category: 'Entertainment', subcategory: 'Streaming' },
+};
+
+const YOUTUBE_DEFAULT = { category: 'Entertainment', subcategory: 'Streaming' };
+const LEARNING_ON_YOUTUBE = new Set(['Developer Tools', 'AI Tools']);
+const YOUTUBE_CODING = { category: 'Study', subcategory: 'Courses & Lectures' };
+
 // A page that refused to load says nothing about the site, so don't guess from it.
 const REFUSED_PAGE = /^(access (to this page has been )?denied|just a moment|attention required|are you a robot|verify you are human|403\b|404\b|page not found)/i;
 
-const SEARCH_ENGINES = /(^|\.)(google\.[a-z.]+|bing\.com|duckduckgo\.com|search\.yahoo\.com)$/;
+// The search sites themselves, not every Google site: gemini.google.com isn't a search.
+const SEARCH_ENGINES = /^(google\.[a-z.]+|bing\.com|duckduckgo\.com|search\.yahoo\.com)$/;
 
 function hostOf(url) {
   try {
@@ -225,19 +267,27 @@ export function classifyByRules(tab) {
   const host = hostOf(tab.url);
 
   if (host === 'youtube.com' || host === 'm.youtube.com') {
-    const isVideo = /^\/(watch|shorts|live)\b/.test(new URL(tab.url).pathname);
-    if (!isVideo) return { category: 'Entertainment', subcategory: 'Streaming' };
+    const { pathname } = new URL(tab.url);
+    const isVideo = /^\/(watch|shorts|live)\b/.test(pathname);
+    const isChannel = /^\/(@|channel\/|c\/|user\/)/.test(pathname);
+    if (!isVideo && !isChannel) return YOUTUBE_DEFAULT; // home, subscriptions, ...
     if (STUDY_CHANNELS.has((tab.channel || '').trim().toLowerCase())) {
       return { category: 'Study', subcategory: 'Courses & Lectures' };
     }
-    // A video the model isn't sure about is still most likely entertainment.
-    return { useModel: true, defaultTo: { category: 'Entertainment', subcategory: 'Streaming' } };
+    if (isVideo && YOUTUBE_CATEGORIES[tab.youtubeCategory]) return YOUTUBE_CATEGORIES[tab.youtubeCategory];
+    // A video or channel the model isn't sure about is still most likely entertainment.
+    return { useModel: true, defaultTo: YOUTUBE_DEFAULT, onYouTube: true };
   }
 
   const known = lookUpKnownSite(host);
   if (known) return known;
 
   if (REFUSED_PAGE.test(cleanTitle(tab.title))) return FALLBACK;
+
+  // A company's careers pages are about the job, whatever the company does.
+  if (/^(careers|jobs)\./.test(host) || /\/(careers|jobs)(\/|$)/i.test(new URL(tab.url).pathname)) {
+    return { category: 'Work', subcategory: 'Jobs' };
+  }
 
   if (SEARCH_ENGINES.test(host)) {
     // Judge a search by what was searched for. A search homepage has no topic.
@@ -276,29 +326,93 @@ export function closestDescription(vector, descriptions) {
 }
 
 /**
- * Classifies tabs, using the model only for those the rules can't settle.
+ * The key a correction is remembered under: the site, or for YouTube, the
+ * channel, since one site holds every kind of video. Null where a correction
+ * can't carry over to other pages: searches, and YouTube pages with no channel.
+ * background.js has a copy of this; a test checks they agree.
+ */
+export function correctionKey(tab) {
+  const host = hostOf(tab.url);
+  if (!host || !/^https?:/.test(tab.url || '') || SEARCH_ENGINES.test(host)) return null;
+  if (host === 'youtube.com' || host === 'm.youtube.com') {
+    const channel = (tab.channel || '').trim().toLowerCase();
+    return channel ? `youtube:${channel}` : null;
+  }
+  return host;
+}
+
+/** True if `answer` names a real category and one of its subcategories. */
+export function isValidAnswer(answer) {
+  const entry = CATEGORIES.find(c => c.name === answer?.category);
+  return Boolean(entry && answer.subcategory in entry.subcategories);
+}
+
+/**
+ * Classifies tabs. In order: your corrections, then the rules, then a model for
+ * whatever is left.
  *
- * @param {Array<{url:string, title?:string, description?:string, content?:string, channel?:string}>} tabs
+ * @param {Array<{url:string, title?:string, description?:string, content?:string, channel?:string, youtubeCategory?:string}>} tabs
  * @param {(texts:string[]) => Promise<number[][]>} embed - function name kept
  *        out of this module so sites on the list never load the model
- * @param {{useRules?:boolean}} [options] - useRules:false measures the model alone
- * @returns {Promise<Array<{category:string, subcategory:string}>>} one per tab
+ * @param {object} [options]
+ * @param {boolean} [options.useRules] - false measures the model alone
+ * @param {Object<string, {category:string, subcategory?:string}>} [options.corrections]
+ *        correctionKey → what you said. Without a subcategory, the closest one
+ *        inside that category is picked.
+ * @param {(tabs:object[]) => Promise<Array<{category,subcategory}|null>>} [options.askModel]
+ *        another model to ask first (Gemini Nano). Any answer it can't give, or
+ *        gives wrongly, goes to the embedding model instead.
+ * @returns {Promise<Array<{category:string, subcategory:string, source:string}>>}
+ *        one per tab; source is correction, rules, nano or model
  */
-export async function classifyTabs(tabs, embed, { useRules = true } = {}) {
-  const decisions = tabs.map(tab => (useRules ? classifyByRules(tab) : { useModel: true }));
-  const needModel = decisions.flatMap((d, i) => (d.useModel ? [i] : []));
+export async function classifyTabs(tabs, embed, { useRules = true, corrections = {}, askModel = null } = {}) {
+  const decisions = tabs.map((tab) => {
+    if (!useRules) return { useModel: true };
+    const key = correctionKey(tab);
+    const corrected = key ? corrections[key] : null;
+    if (corrected && isValidAnswer(corrected)) return { ...corrected, source: 'correction' };
+    if (corrected && CATEGORIES.some(c => c.name === corrected.category)) return { useModel: true, onlyCategory: corrected.category };
+    const decision = classifyByRules(tab);
+    return decision.useModel ? decision : { ...decision, source: 'rules' };
+  });
 
+  // A model's answer still goes through the YouTube adjustments.
+  const settle = (tabIndex, answer, source) => {
+    const decision = decisions[tabIndex];
+    let result = { category: answer.category, subcategory: answer.subcategory, source };
+    if (decision.onYouTube && LEARNING_ON_YOUTUBE.has(result.subcategory)) result = { ...YOUTUBE_CODING, source };
+    decisions[tabIndex] = result;
+  };
+
+  const askable = decisions.flatMap((d, i) => (d.useModel && !d.onlyCategory ? [i] : []));
+  if (askModel && askable.length > 0) {
+    let answers = [];
+    try {
+      answers = (await askModel(askable.map(i => ({ ...tabs[i], query: decisions[i].text })))) || [];
+    } catch {
+      answers = []; // the other model failed: the embedding model answers everything
+    }
+    askable.forEach((tabIndex, n) => {
+      if (isValidAnswer(answers[n])) settle(tabIndex, answers[n], 'nano');
+    });
+  }
+
+  const needModel = decisions.flatMap((d, i) => (d.useModel ? [i] : []));
   if (needModel.length > 0) {
     const descriptions = await loadDescriptionVectors(embed);
     const vectors = await embed(needModel.map(i => decisions[i].text || classificationText(tabs[i])));
     needModel.forEach((tabIndex, n) => {
+      const { onlyCategory, defaultTo } = decisions[tabIndex];
+      if (onlyCategory) {
+        const closest = closestDescription(vectors[n], descriptions.filter(d => d.category === onlyCategory));
+        decisions[tabIndex] = { category: closest.category, subcategory: closest.subcategory, source: 'correction' };
+        return;
+      }
       const closest = closestDescription(vectors[n], descriptions);
-      decisions[tabIndex] = closest.score >= MIN_CONFIDENCE
-        ? closest
-        : (decisions[tabIndex].defaultTo || FALLBACK);
+      settle(tabIndex, closest.score >= MIN_CONFIDENCE ? closest : (defaultTo || FALLBACK), 'model');
     });
   }
-  return decisions.map(({ category, subcategory }) => ({ category, subcategory }));
+  return decisions.map(({ category, subcategory, source }) => ({ category, subcategory, source }));
 }
 
 /** Everything the service worker needs to place a tab in the tab strip. */

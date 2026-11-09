@@ -117,6 +117,55 @@ function extractContent() {
   };
 }
 
+// ─── YouTube ──────────────────────────────────────────────────────────────
+
+/** The id of the YouTube video open in this tab, or null. */
+function youtubeVideoId() {
+  if (!window.location.hostname.endsWith('youtube.com')) return null;
+  const url = new URL(window.location.href);
+  if (url.pathname === '/watch') return url.searchParams.get('v');
+  return url.pathname.match(/^\/(?:shorts|live)\/([\w-]+)/)?.[1] || null;
+}
+
+// YouTube changes video without loading a new page, and doesn't update the
+// page's own details when it does, so only the first video can be read here.
+const firstVideoId = youtubeVideoId();
+const youtubeDetailsCache = new Map(); // video id → { category, channel }
+
+/** Reads a string out of YouTube's page data, undoing JSON escapes like \u0026. */
+function jsonString(html, key) {
+  const raw = html.match(new RegExp(`"${key}":"((?:[^"\\\\]|\\\\.)*)"`))?.[1];
+  if (raw === undefined) return '';
+  try { return JSON.parse(`"${raw}"`); } catch { return raw; }
+}
+
+/**
+ * The category YouTube lists for a video (Education, Music, Gaming, ...) and its
+ * channel. For any video after the first, this fetches the video's own page from
+ * youtube.com, the site this tab is already on. Nothing goes anywhere else.
+ */
+async function youtubeDetails(videoId) {
+  if (!videoId) return null;
+  if (youtubeDetailsCache.has(videoId)) return youtubeDetailsCache.get(videoId);
+
+  let details = null;
+  if (videoId === firstVideoId) {
+    const category = document.querySelector('meta[itemprop="genre"]')?.content;
+    if (category) details = { category, channel: '' };
+  }
+  if (!details) {
+    try {
+      const response = await fetch(`/watch?v=${encodeURIComponent(videoId)}`);
+      const html = await response.text();
+      details = { category: jsonString(html, 'category'), channel: jsonString(html, 'ownerChannelName') };
+    } catch {
+      return null; // offline or blocked: try again next time, don't remember the failure
+    }
+  }
+  youtubeDetailsCache.set(videoId, details);
+  return details;
+}
+
 // ─── Communication with Background ────────────────────────────────────────
 
 function getDwellTime() {
@@ -124,13 +173,31 @@ function getDwellTime() {
   return totalDwell + current;
 }
 
-function notifyBackground() {
-  const data = {
-    ...extractContent(),
-    dwellMs: getDwellTime(),
-    hourOfDay: new Date().getHours(),
-  };
+/**
+ * Passes everything background.js keeps about this tab to `callback`: at once,
+ * or after looking up what a YouTube video is.
+ */
+function withTabData(callback) {
+  const data = { ...extractContent(), dwellMs: getDwellTime(), hourOfDay: new Date().getHours() };
+  const videoId = youtubeVideoId();
+  if (!videoId) {
+    callback(data);
+    return;
+  }
+  youtubeDetails(videoId).then((youtube) => {
+    if (youtube) {
+      data.youtubeCategory = youtube.category;
+      if (youtube.channel) data.channel = youtube.channel; // the page's own may be from the last video
+    }
+    callback(data);
+  });
+}
 
+function notifyBackground() {
+  withTabData(sendToBackground);
+}
+
+function sendToBackground(data) {
   chrome.runtime.sendMessage({
     type: 'TAB_DATA_UPDATE',
     payload: data
@@ -143,11 +210,7 @@ function notifyBackground() {
 // Listen for background asking for fresh data
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'REQUEST_TAB_DATA') {
-    sendResponse({
-      ...extractContent(),
-      dwellMs: getDwellTime(),
-      hourOfDay: new Date().getHours(),
-    });
+    withTabData(sendResponse);
     return true; // Keep message channel open for async response
   }
 });

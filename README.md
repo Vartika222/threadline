@@ -15,7 +15,8 @@ Chrome Web Store.
 ## How it works
 
 1. **Read.** A content script reads each page's title, meta description, top
-   headings and first paragraph, plus the channel on YouTube videos.
+   headings and first paragraph, plus the channel and YouTube's own category
+   (Education, Music, Gaming, ...) on YouTube videos.
 2. **Categorise.** Each tab gets one of 8 categories and a subcategory:
 
    | Category | Subcategories |
@@ -30,8 +31,9 @@ Chrome Web Store.
    | Life & Other | Health, Home, Travel, Society, Unsure |
 
    Three steps decide it:
-   - **Content on mixed sites.** A YouTube video is judged by its channel and title,
-     so a lecture lands in Study and the homepage in Entertainment. A Google search
+   - **Content on mixed sites.** A YouTube video is judged by its channel, then the
+     category YouTube lists for it, then its title, so a lecture lands in Study and
+     the homepage in Entertainment. Switching video inside YouTube re-sorts the tab. A Google search
      is judged by what was searched for.
    - **A known sites list** for common sites. This needs no model.
    - **The language model** for everything else. A pretrained neural network,
@@ -46,18 +48,31 @@ Chrome Web Store.
    related tabs. That chain is built from the best of a maximum spanning tree walked
    depth-first and a greedy walk, polished by local search. **Undo** restores the
    previous arrangement.
-5. **Focus mode.** Pick a category and a duration, and the other groups collapse.
-   Opening another category shows `!` on the badge, or with strict focus enabled,
-   a "Back to Study" page offering **Allow this site** and **End focus**. Tabs marked
-   Unsure are never blocked. There's no screen for this yet. In the service worker
-   console:
-
-   ```js
-   threadline.startFocus('Study', 50)
-   threadline.setStrictFocus(true)   // off by default
-   threadline.endFocus()
-   ```
-6. **Personalise (optional, off by default).** Tick **Personalise sorting
+5. **Focus timer.** In the popup's **Focus** page, pick a category and a duration
+   (25, 50, 90 or any number of minutes) and click **Start focus**. It never starts on
+   its own. The other groups collapse and the icon counts down the minutes. Opening
+   another category shows `!` on the icon, or, with **Strict** ticked, a "Back to
+   Study" page offering **Allow this site** and **End focus**. Tabs marked Unsure are
+   never blocked. Ending a strict session early takes two clicks.
+6. **Snapshots.** In the popup's **Snapshots** page, **Save** keeps this window's tabs
+   in their order and groups, including anything arranged by hand (**↓ Save** in the
+   header does the same without a name). **Restore** puts the tabs back, reopens any
+   that were closed, and recreates the groups; automatic sorting then leaves those
+   tabs where they are until they navigate somewhere new. **Undo** reverses a
+   restore. The last 20 snapshots are kept.
+7. **Corrections.** Drag a tab into another category's group, or pick a category
+   from the menu next to it on the popup's **Tabs** page, and Threadline remembers it
+   for the whole site (for YouTube, for that channel). Every open tab from that site
+   moves too, and later ones follow. The **Model** page lists what's remembered and
+   can forget any of it. Threadline's own moves never count as corrections.
+8. **Gemini Nano (experimental, off by default).** The **Model** page can download
+   Chrome's built-in language model (free, runs on this computer) and use it for tabs
+   the site list and your corrections don't settle. It needs Chrome 138+, 22 GB free
+   disk space and 16 GB of memory or a GPU with more than 4 GB. **Compare with the
+   current model on my tabs** shows both answers side by side so you can mark which is
+   right and copy the results. If Gemini Nano isn't there, is slow (over 20 s), or gives
+   an answer outside the categories, the current model answers instead.
+9. **Personalise (optional, off by default).** Tick **Personalise sorting
    (experimental)** in the popup and Threadline learns from your drags and from
    switching back and forth between two tabs. This only affects the order inside a
    subcategory, and it hasn't been shown to help (see Evaluation).
@@ -114,7 +129,7 @@ categories, captured from their homepages:
 | --- | ---: |
 | Sites, language model alone (no known sites list) | **78 of 83 (94%)** |
 | YouTube videos by title | 22 of 22 |
-| Google searches | 8 of 9 |
+| Google searches | 9 of 9 |
 
 Treat these as optimistic. I chose the test sites, they're homepages, and I adjusted
 a description after seeing the search and video tests, which I also wrote by hand.
@@ -201,13 +216,19 @@ See [CODE_GUIDE.md](CODE_GUIDE.md) for a guided tour of the code and
 
 - Personalisation is off by default and hasn't been shown to help (see
   Evaluation).
-- Focus mode has no screen yet, only service worker console commands.
+- Snapshots restore into the current window only, and a restored tab that redirects
+  to a different address loses its protection from automatic sorting.
 - **Categories will sometimes be wrong**, especially for sites that aren't on the known
-  list, and there's no way yet to correct one and have it remembered.
-- Short searches give the model little to go on: "what is photosynthesis" lands in
-  Social.
-- YouTube channel names come from the page's layout, so a redesign could stop that
-  working. Video titles would still be used.
+  list. Correct one once and it's remembered for that site.
+- Gemini Nano hasn't been measured against the current model yet: use the comparison
+  on the Model page. It only reads English, Japanese, Spanish, German and French.
+- Short searches give the model little to go on, so a vague one can land in the wrong
+  category.
+- YouTube's category for a video is whatever the uploader picked, and is read from
+  YouTube's page data, so a redesign could stop that working. Video titles would
+  still be used.
+- The model only understands English: a lecture titled in another language can land
+  in the wrong category.
 - Tab groups can't be nested in Chrome, so subcategories only show as the order inside
   a group, in the popup, and in the badge's tooltip.
 - **Sort now** takes a few seconds, because WebAssembly runs on one thread in an

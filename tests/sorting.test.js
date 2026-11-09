@@ -15,8 +15,15 @@ const RULES = {
   unsure: { category: 'Life & Other', subcategory: 'Unsure', color: 'green', categoryRank: 7, subcategoryRank: 4 },
 };
 const NAMES = ['Study', 'Work', 'Entertainment', 'Games', 'Social', 'Shopping & Art', 'News', 'Life & Other'];
+const BY_CATEGORY = { Study: RULES.study, 'Shopping & Art': RULES.shop, 'Life & Other': RULES.unsure };
 const classifier = (message) => ({
-  placements: message.tabs.map(tab => RULES[new URL(tab.url).hostname.split('.')[0]] || RULES.unsure),
+  placements: message.tabs.map(tab => {
+    const corrected = message.corrections?.[new URL(tab.url).hostname];
+    if (corrected) return BY_CATEGORY[corrected.category];
+    return tab.youtubeCategory === 'Education' || tab.content === 'about studying'
+      ? RULES.study
+      : RULES[new URL(tab.url).hostname.split('.')[0]] || RULES.unsure;
+  }),
   categoryNames: NAMES,
 });
 const tab = (id, site, extra = {}) => ({ id, title: site, url: `https://${site}.test/`, ...extra });
@@ -99,6 +106,38 @@ test('a page still loading waits until its text has arrived', async () => {
     { type: 'TAB_DATA_UPDATE', payload: { url: openTabs[0].url, content: 'page text' } }, { tab: { id: 1 } }, resolve));
   await api.runAutoSort();
   assert(groups.length === 1, 'sorted once the text arrived');
+});
+
+const pageData = (listeners, payload) => new Promise(resolve =>
+  listeners.onMessage[0]({ type: 'TAB_DATA_UPDATE', payload }, { tab: { id: 1 } }, resolve));
+
+test('a YouTube video waits for its channel and category, then goes by them', async () => {
+  const video = { id: 1, title: 'A course - YouTube', url: 'https://www.youtube.com/watch?v=a', status: 'complete' };
+  const { api, listeners, openTabs, groups } = await boot([video]);
+  await api.runAutoSort();
+  assert(groups.length === 0, 'not sorted before YouTube says what the video is');
+  await listeners.onCreated[0](openTabs[0]);
+  await pageData(listeners, { url: video.url, content: 'A course', channel: 'Someone', youtubeCategory: 'Education' });
+  await api.runAutoSort();
+  assert(openTabs[0].groupId === groups.find(g => g.title === 'Study')?.id, groupTitles({ groups }));
+});
+
+test('a tab is sorted again when its details arrive after it was sorted', async () => {
+  const { api, listeners, openTabs, groups } = await boot([tab(1, 'other')]);
+  await api.runAutoSort();
+  assert(groupTitles({ groups }) === 'Life & Other', groupTitles({ groups }));
+  await listeners.onCreated[0](openTabs[0]);
+  await pageData(listeners, { url: openTabs[0].url, content: 'about studying' });
+  await api.runAutoSort();
+  assert(openTabs[0].groupId === groups.find(g => g.title === 'Study')?.id, 'moved once its text arrived');
+});
+
+test('details saved for a previous page are not used for the new one', async () => {
+  const { api, listeners, openTabs, groups } = await boot([tab(1, 'other')]);
+  await listeners.onCreated[0](openTabs[0]);
+  await pageData(listeners, { url: 'https://earlier.test/', content: 'about studying' });
+  await api.runAutoSort();
+  assert(groupTitles({ groups }) === 'Life & Other', groupTitles({ groups }));
 });
 
 test('retries while the user is dragging a tab', async () => {
@@ -264,4 +303,177 @@ test('Go back leaves the blocked page for a tab on task', async () => {
   assert(openTabs.find(t => t.id === 1).active === true, 'back on the focus tab');
 });
 
-await done();
+await section('snapshots');
+
+test('a snapshot keeps the order, groups and names of a hand-made arrangement', async () => {
+  const { listeners, openTabs, groups } = await boot([tab(1, 'shop', { groupId: 50 }), tab(2, 'study', { groupId: 50 }), tab(3, 'other')]);
+  groups.push({ id: 50, windowId: 1, title: 'My project', color: 'red', collapsed: false });
+  const { snapshot } = await send(listeners, { type: 'SAVE_SNAPSHOT', name: '  Exam week ' });
+  assert(snapshot.name === 'Exam week', snapshot.name);
+  assert(snapshot.tabs.map(t => t.url).join() === openTabs.map(t => t.url).join(), 'tabs in order');
+  assert(snapshot.groups[0].title === 'My project' && snapshot.tabs[0].group === 50 && snapshot.tabs[2].group === null, JSON.stringify(snapshot));
+  const { snapshots } = await send(listeners, { type: 'GET_SNAPSHOTS' });
+  assert(snapshots.length === 1, 'listed');
+});
+
+test('a snapshot without a name gets the date and time', async () => {
+  const { listeners } = await boot([tab(1, 'study')]);
+  const { snapshot } = await send(listeners, { type: 'SAVE_SNAPSHOT' });
+  assert(/\d/.test(snapshot.name), snapshot.name);
+});
+
+test('restoring puts open tabs back in order and recreates the groups', async () => {
+  const { listeners, openTabs, groups } = await boot([tab(1, 'shop'), tab(2, 'study'), tab(3, 'other')]);
+  await send(listeners, { type: 'SAVE_SNAPSHOT', name: 'before' });
+  const { snapshots: [saved] } = await send(listeners, { type: 'GET_SNAPSHOTS' });
+  // Rearrange by hand, then group two tabs, then restore.
+  await chrome.tabs.move(1, { index: 2 });
+  await chrome.tabs.group({ tabIds: [2, 3] });
+  saved.groups = [{ id: 7, title: 'Kept', color: 'cyan', collapsed: false }];
+  saved.tabs[0].group = 7; saved.tabs[1].group = 7;
+  await chrome.storage.local.set({ snapshots: [saved] });
+
+  const result = await send(listeners, { type: 'RESTORE_SNAPSHOT', id: saved.id });
+  assert(result.ok && result.restored === 3 && result.reopened === 0, JSON.stringify(result));
+  assert(order(openTabs) === '1,2,3', order(openTabs));
+  assert(groupTitles({ groups }) === 'Kept', groupTitles({ groups }));
+  const kept = groups[0].id;
+  assert(openTabs.filter(t => t.groupId === kept).map(t => t.id).join() === '1,2', 'the right tabs in the group');
+});
+
+test('restoring reopens closed tabs and skips browser pages', async () => {
+  const { listeners, openTabs } = await boot([tab(1, 'study')]);
+  const saved = { id: 5, name: 'old', createdAt: 0, groups: [], tabs: [
+    { url: 'https://shop.test/', pinned: false, group: null },
+    { url: 'https://study.test/', pinned: false, group: null },
+    { url: 'chrome://settings/', pinned: false, group: null },
+  ] };
+  await chrome.storage.local.set({ snapshots: [saved] });
+  const result = await send(listeners, { type: 'RESTORE_SNAPSHOT', id: 5 });
+  assert(result.restored === 2 && result.reopened === 1 && result.skipped === 1, JSON.stringify(result));
+  assert(openTabs.map(t => t.url).join() === 'https://shop.test/,https://study.test/', openTabs.map(t => t.url).join());
+});
+
+test('automatic sorting leaves restored tabs where they are, but learns their category', async () => {
+  const { api, listeners, openTabs, groups } = await boot([tab(1, 'shop'), tab(2, 'study')]);
+  await send(listeners, { type: 'SAVE_SNAPSHOT', name: 'mine' });
+  const { snapshots: [saved] } = await send(listeners, { type: 'GET_SNAPSHOTS' });
+  await send(listeners, { type: 'RESTORE_SNAPSHOT', id: saved.id });
+  await api.runAutoSort();
+  assert(groups.length === 0 && order(openTabs) === '1,2', `${groupTitles({ groups })} ${order(openTabs)}`);
+  const { placements } = await send(listeners, { type: 'GET_SORT_STATE' });
+  assert(placements[2].category === 'Study', JSON.stringify(placements[2]));
+  // Once it navigates somewhere new, it's sorted as usual.
+  openTabs[1].url = 'https://shop.test/other';
+  await api.runAutoSort();
+  assert(groupTitles({ groups }) === 'Shopping & Art', groupTitles({ groups }));
+});
+
+test('Undo reverses a restore', async () => {
+  const { listeners, openTabs } = await boot([tab(1, 'shop'), tab(2, 'study')]);
+  await send(listeners, { type: 'SAVE_SNAPSHOT', name: 'mine' });
+  const { snapshots: [saved] } = await send(listeners, { type: 'GET_SNAPSHOTS' });
+  await chrome.tabs.move(1, { index: 1 });
+  await send(listeners, { type: 'RESTORE_SNAPSHOT', id: saved.id });
+  assert(order(openTabs) === '1,2', order(openTabs));
+  await send(listeners, { type: 'UNDO_SORT' });
+  assert(order(openTabs) === '2,1', order(openTabs));
+});
+
+test('deleting a snapshot removes only that one', async () => {
+  const { listeners } = await boot([tab(1, 'study')]);
+  const { snapshot: a } = await send(listeners, { type: 'SAVE_SNAPSHOT', name: 'a' });
+  await new Promise(resolve => setTimeout(resolve, 2));
+  await send(listeners, { type: 'SAVE_SNAPSHOT', name: 'b' });
+  await send(listeners, { type: 'DELETE_SNAPSHOT', id: a.id });
+  const { snapshots } = await send(listeners, { type: 'GET_SNAPSHOTS' });
+  assert(snapshots.map(s => s.name).join() === 'b', snapshots.map(s => s.name).join());
+  assert((await send(listeners, { type: 'RESTORE_SNAPSHOT', id: a.id })).error, 'a deleted snapshot cannot be restored');
+});
+
+section('focus from the popup');
+
+test('the popup can start focus with strict on, read it back, and end it', async () => {
+  const { listeners } = await boot([tab(1, 'study')]);
+  await send(listeners, { type: 'SET_STRICT_FOCUS', enabled: true });
+  const started = await send(listeners, { type: 'START_FOCUS', category: 'Study', minutes: 25 });
+  assert(started.ok, JSON.stringify(started));
+  const state = await send(listeners, { type: 'GET_FOCUS' });
+  assert(state.focus.category === 'Study' && state.strict === true, JSON.stringify(state));
+  await send(listeners, { type: 'END_FOCUS' });
+  assert((await send(listeners, { type: 'GET_FOCUS' })).focus === null, 'ended');
+});
+
+section('corrections');
+
+const quiet = () => new Promise(resolve => setTimeout(resolve, 1600)); // past Threadline's own moves
+const dragInto = async (listeners, openTabs, tabId, groupId) => {
+  const t = openTabs.find(x => x.id === tabId);
+  t.groupId = groupId;
+  await listeners.onUpdated[0](tabId, { groupId }, t);
+};
+
+test('dragging a tab into another category group remembers it, and moves the rest of the site', async () => {
+  const { api, listeners, openTabs, groups } = await boot([tab(1, 'shop'), tab(2, 'study'), { id: 3, title: 'more', url: 'https://shop.test/other' }]);
+  await api.runAutoSort();
+  await quiet();
+  const studyGroup = groups.find(g => g.title === 'Study').id;
+  await dragInto(listeners, openTabs, 1, studyGroup);
+  const { corrections } = await send(listeners, { type: 'GET_CORRECTIONS' });
+  assert(corrections['shop.test']?.category === 'Study', JSON.stringify(corrections));
+  await api.runAutoSort();
+  assert(openTabs.find(t => t.id === 3).groupId === studyGroup, 'the other shop.test tab followed');
+});
+
+test("Threadline's own sorting is never taken as a correction", async () => {
+  const { api, listeners, openTabs, groups } = await boot([tab(1, 'shop'), tab(2, 'study')]);
+  await api.runAutoSort();
+  const studyGroup = groups.find(g => g.title === 'Study').id;
+  await dragInto(listeners, openTabs, 1, studyGroup); // straight after its own moves
+  const { corrections } = await send(listeners, { type: 'GET_CORRECTIONS' });
+  assert(Object.keys(corrections).length === 0, JSON.stringify(corrections));
+});
+
+test('dragging into a group you made yourself is not a correction', async () => {
+  const { api, listeners, openTabs, groups } = await boot([tab(1, 'shop')]);
+  await api.runAutoSort();
+  await quiet();
+  groups.push({ id: 60, windowId: 1, title: 'Mine', color: 'red', collapsed: false });
+  await dragInto(listeners, openTabs, 1, 60);
+  const { corrections } = await send(listeners, { type: 'GET_CORRECTIONS' });
+  assert(Object.keys(corrections).length === 0, JSON.stringify(corrections));
+});
+
+test('picking a category in the popup moves the tab and can be forgotten', async () => {
+  const { api, listeners, openTabs, groups } = await boot([tab(1, 'shop')]);
+  await api.runAutoSort();
+  const reply = await send(listeners, { type: 'CORRECT_TAB', tabId: 1, category: 'Study' });
+  assert(reply.ok && reply.key === 'shop.test', JSON.stringify(reply));
+  await api.runAutoSort();
+  assert(openTabs[0].groupId === groups.find(g => g.title === 'Study')?.id, groupTitles({ groups }));
+  await send(listeners, { type: 'FORGET_CORRECTION', key: 'shop.test' });
+  assert(Object.keys((await send(listeners, { type: 'GET_CORRECTIONS' })).corrections).length === 0, 'forgotten');
+  const bad = await send(listeners, { type: 'CORRECT_TAB', tabId: 1, category: 'Nonsense' });
+  assert(bad.error, 'unknown category refused');
+});
+
+test('background.js and categories.js agree on what a correction is kept under', async () => {
+  const { api } = await boot([]);
+  const { correctionKey } = await import('../src/ml/categories.js');
+  for (const t of [
+    { url: 'https://www.hotstar.com/in/home' }, { url: 'https://in.pinterest.com/' },
+    { url: 'https://www.youtube.com/watch?v=a', channel: 'Manware' }, { url: 'https://www.youtube.com/' },
+    { url: 'https://www.google.co.in/search?q=x' }, { url: 'https://gemini.google.com/app' }, { url: 'chrome://newtab/' },
+  ]) {
+    assert(api.correctionKey(t) === correctionKey(t), `${t.url}: ${api.correctionKey(t)} vs ${correctionKey(t)}`);
+  }
+});
+
+test('Gemini Nano is off by default and can be switched on', async () => {
+  const { listeners } = await boot([]);
+  assert((await send(listeners, { type: 'GET_NANO' })).enabled === false, 'off');
+  await send(listeners, { type: 'SET_NANO', enabled: true });
+  assert((await send(listeners, { type: 'GET_NANO' })).enabled === true, 'on');
+});
+
+done();

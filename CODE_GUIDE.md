@@ -152,8 +152,14 @@ the connector opacity and the `%` label. `reannotateChain` redoes that after a d
 model:
 
 - **Mixed sites.** YouTube's homepage is Entertainment. A video on a channel in
-  `STUDY_CHANNELS` is Study. Any other video goes to the model, falling back to
-  Entertainment if it isn't confident. A search goes to the model using only the query.
+  `STUDY_CHANNELS` is Study. Otherwise YouTube's own category decides
+  (`YOUTUBE_CATEGORIES`: Education → Study, Music → Entertainment › Music, ...). Broad
+  categories (People & Blogs, Science & Technology), and channel pages, go to the
+  model, falling back to Entertainment if it isn't confident; a programming video it
+  calls Developer Tools counts as Study. The content script reads the category from
+  the page for the first video, and fetches the video's own youtube.com page after
+  in-site navigation. A tab is re-sorted when its text, channel or category arrives
+  after it was sorted (`sortBasis` in background.js). A search goes to the model using only the query.
 - **`KNOWN_SITES`.** Host → category and subcategory, also trying parent domains. Block
   pages (`REFUSED_PAGE`) on unknown sites go to Unsure rather than being guessed from.
 - **The model.** `closestDescription` compares the tab with every subcategory's written
@@ -179,6 +185,25 @@ descriptions, because dmoz has no social or streaming labels (`training/README.m
   restart. `enforceFocus` runs on tab activation and after sorting. Strict focus is opt-in,
   Unsure tabs are never blocked, and the blocked page can always allow a site or end
   focus, because the classifier will be wrong sometimes.
+  The popup's `FocusPanel.jsx` starts and ends it through `START_FOCUS`, `END_FOCUS`,
+  `GET_FOCUS` and `SET_STRICT_FOCUS`; it never starts on its own.
+- **Corrections** (`correctTab`, `learnFromMove`) are stored under `correctionKey`: the
+  site, or `youtube:<channel>`; never for searches. `tabs.onUpdated` with a `groupId`
+  into a category group other than the tab's placement is a correction, except while
+  Threadline is moving tabs itself (`asOwnEdit`, plus 1.5 s after). A correction clears
+  the `basis` of every open tab with the same key, so `runAutoSort` sorts them again.
+  `classifyTabs` checks corrections before the rules; one without a subcategory picks the
+  closest subcategory inside that category. background.js has a copy of
+  `correctionKey`, and a test checks both agree.
+- **Gemini Nano** (`src/ml/nano.js`) is passed to `classifyTabs` as `askModel` when it is
+  switched on and `available`. It answers only with a `Category › Subcategory` label
+  (`responseConstraint` enum), one tab per cloned session; anything it can't answer
+  goes to the embedding model. Status checks give up after 3 s, prompts after 20 s.
+- **Snapshots** (`saveSnapshot`, `restoreSnapshot`) keep a window's tabs in order with
+  their groups. Restoring matches saved tabs to open ones by address, reopens the rest,
+  regroups them, and marks their placements `manual: true`: `runAutoSort` still learns
+  their category but doesn't move them until they navigate elsewhere. It saves Undo
+  state first. The popup's `SnapshotsPanel.jsx` lists, restores and deletes them.
 
 ### 4e. `recency.js` — "how long since this tab was touched" *(new)*
 
@@ -344,7 +369,7 @@ and the `chrome.tabs` event hooks, plus the small runner the newer files use.
 |---|---|
 | `graph.test.js` | MST has N-1 edges, DFS visits every node once, `buildChainOrder` returns every tab once and is at least as strong as MST or greedy alone, local search never lowers the total, 200 tabs finish in under a second |
 | `categories.test.js` | The rules with no model: your tabs, YouTube homepage vs video vs study channel, searches by query, block pages, known sites naming real categories |
-| `sorting.test.js` | Automatic grouping, tabs moved by hand staying put, user groups left alone, retries during drags, Sort now, Undo, focus mode in gentle and strict form |
+| `sorting.test.js` | Automatic grouping, tabs moved by hand staying put, user groups left alone, retries during drags, Sort now, Undo, focus mode in gentle and strict form, snapshots: save, restore (order, groups, reopening), kept out of automatic sorting, Undo, delete |
 | `retrain.test.js` | `shouldRetrain`: trains at 15, still triggers when the count jumps past a checkpoint (13 → 16), waits for 5 new examples between trainings, keeps training past the 200-example storage cap |
 | `personalise.test.js` | Off by default; with no adjustment it equals cosine; always symmetric and on the 0-1 scale; training moves scores the right way, is deterministic and fast; inconsistent corrections stay near cosine |
 | `embedder.test.js` | The real bundled model loads with no network, gives unit-length 384-dim vectors, ranks related text above unrelated, survives blank text |

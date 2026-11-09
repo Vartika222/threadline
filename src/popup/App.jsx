@@ -2,7 +2,8 @@
  * THREADLINE — App.jsx
  *
  * The popup UI. Three views:
- *   'idle'    → default, shows current tabs + Sort button
+ *   'idle'    → default: pages for the tabs and Sort button, the focus timer,
+ *               and snapshots
  *   'sorting' → ML pipeline running, shows progress
  *   'sorted'  → shows the relatability chain, apply button
  *
@@ -18,6 +19,10 @@
 import React, { useState, useEffect } from 'react';
 import TabChain, { CLUSTER_COLORS } from './TabChain.jsx';
 import SortButton from './SortButton.jsx';
+import FocusPanel from './FocusPanel.jsx';
+import SnapshotsPanel from './SnapshotsPanel.jsx';
+import ModelPanel from './ModelPanel.jsx';
+import { CATEGORY_NAMES } from '../ml/categories.js';
 import { runMLPipeline } from '../ml/pipeline.js';
 import { deriveTrainingPairs } from '../ml/feedback.js';
 import { reannotateChain } from '../ml/graph.js';
@@ -36,6 +41,8 @@ import {
 
 export default function App() {
   const [view, setView] = useState('idle');
+  const [page, setPage] = useState('tabs'); // inside the idle view
+  const [savedNote, setSavedNote] = useState(false);
   const [tabs, setTabs] = useState([]);
   const [sortedChain, setSortedChain] = useState([]);
   const [clusters, setClusters] = useState({});
@@ -52,6 +59,8 @@ export default function App() {
   const [sortMethod, setSortMethod] = useState('cosine');
   const [autoSort, setAutoSort] = useState(true);
   const [canUndo, setCanUndo] = useState(false);
+  const [placements, setPlacements] = useState({});
+  const [correctionNote, setCorrectionNote] = useState(null);
 
   useEffect(() => {
     loadTrainingExamples().then(examples => setExampleCount(examples.length));
@@ -59,6 +68,7 @@ export default function App() {
     chrome.runtime.sendMessage({ type: 'GET_SORT_STATE' }).then(state => {
       setAutoSort(state.autoSort);
       setCanUndo(state.canUndo);
+      setPlacements(state.placements || {});
     });
   }, []);
 
@@ -182,7 +192,24 @@ export default function App() {
 
   async function handleSnapshot() {
     await chrome.runtime.sendMessage({ type: 'SAVE_SNAPSHOT', name: null });
-    // Show brief confirmation (TODO: toast notification)
+    setSavedNote(true);
+    setTimeout(() => setSavedNote(false), 1500);
+  }
+
+  /** Remembers a category for this tab's site; Threadline moves it and its siblings. */
+  async function handleCorrect(tabId, category) {
+    const result = await chrome.runtime.sendMessage({ type: 'CORRECT_TAB', tabId, category });
+    if (result?.error) {
+      setCorrectionNote(result.error);
+      return;
+    }
+    setPlacements(p => ({ ...p, [tabId]: { ...p[tabId], category } }));
+    setCorrectionNote(`Remembered: ${result.key.replace(/^youtube:/, 'YouTube channel ')} → ${category}`);
+  }
+
+  function handleRestored() {
+    setCanUndo(true);
+    loadTabs();
   }
 
   return (
@@ -193,8 +220,8 @@ export default function App() {
           <span className="logo-mark">⬡</span>
           <span className="logo-text">Threadline</span>
         </div>
-        <button className="snapshot-btn" onClick={handleSnapshot} title="Save session snapshot">
-          ↓ Save
+        <button className="snapshot-btn" onClick={handleSnapshot} title="Save this window's tabs, order and groups">
+          {savedNote ? 'Saved ✓' : '↓ Save'}
         </button>
       </header>
 
@@ -202,6 +229,27 @@ export default function App() {
       <main className="main">
 
         {view === 'idle' && (
+          <nav className="page-tabs">
+            {[['tabs', 'Tabs'], ['focus', 'Focus'], ['snapshots', 'Snapshots'], ['model', 'Model']].map(([id, label]) => (
+              <button key={id} className={`page-tab ${page === id ? 'page-tab-on' : ''}`} onClick={() => setPage(id)}>
+                {label}
+              </button>
+            ))}
+          </nav>
+        )}
+
+        {view === 'idle' && page === 'focus' && <FocusPanel />}
+
+        {view === 'idle' && page === 'model' && <ModelPanel />}
+
+        {view === 'idle' && page === 'snapshots' && (
+          <>
+            <SnapshotsPanel onRestored={handleRestored} />
+            {canUndo && <button className="cancel-btn wide" onClick={handleUndo}>Undo</button>}
+          </>
+        )}
+
+        {view === 'idle' && page === 'tabs' && (
           <div className="idle-view">
             <div className="tab-count">
               {tabs.length} tabs open
@@ -213,6 +261,7 @@ export default function App() {
             </label>
             {canUndo && <button className="cancel-btn" onClick={handleUndo}>Undo last sort</button>}
             {error && <div className="error">{error}</div>}
+            {correctionNote && <div className="notice">{correctionNote}</div>}
             <div className="tab-list">
               {tabs.map(tab => {
                 const recency = computeRecencyNorm(tab.lastActive);
@@ -227,6 +276,17 @@ export default function App() {
                       <img src={tab.favIconUrl} className="favicon" alt="" />
                     )}
                     <span className="tab-title">{tab.title || 'Untitled'}</span>
+                    {/^https?:/.test(tab.url || '') && (
+                      <select
+                        className="category-select"
+                        value={placements[tab.tabId]?.category || ''}
+                        onChange={e => handleCorrect(tab.tabId, e.target.value)}
+                        title="Wrong category? Pick the right one and Threadline remembers it for this site"
+                      >
+                        {!placements[tab.tabId]?.category && <option value="">—</option>}
+                        {CATEGORY_NAMES.map(name => <option key={name} value={name}>{name}</option>)}
+                      </select>
+                    )}
                   </div>
                 );
               })}
