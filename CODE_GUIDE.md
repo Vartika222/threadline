@@ -187,6 +187,18 @@ descriptions, because dmoz has no social or streaming labels (`training/README.m
   focus, because the classifier will be wrong sometimes.
   The popup's `FocusPanel.jsx` starts and ends it through `START_FOCUS`, `END_FOCUS`,
   `GET_FOCUS` and `SET_STRICT_FOCUS`; it never starts on its own.
+- **Corrections** (`correctTab`, `learnFromMove`) are stored under `correctionKey`: the
+  site, or `youtube:<channel>`; never for searches. `tabs.onUpdated` with a `groupId`
+  into a category group other than the tab's placement is a correction, except while
+  Threadline is moving tabs itself (`asOwnEdit`, plus 1.5 s after). A correction clears
+  the `basis` of every open tab with the same key, so `runAutoSort` sorts them again.
+  `classifyTabs` checks corrections before the rules; one without a subcategory picks the
+  closest subcategory inside that category. background.js has a copy of
+  `correctionKey`, and a test checks both agree.
+- **Gemini Nano** (`src/ml/nano.js`) is passed to `classifyTabs` as `askModel` when it is
+  switched on and `available`. It answers only with a `Category › Subcategory` label
+  (`responseConstraint` enum), one tab per cloned session; anything it can't answer
+  goes to the embedding model. Status checks give up after 3 s, prompts after 20 s.
 - **Snapshots** (`saveSnapshot`, `restoreSnapshot`) keep a window's tabs in order with
   their groups. Restoring matches saved tabs to open ones by address, reopens the rest,
   regroups them, and marks their placements `manual: true`: `runAutoSort` still learns

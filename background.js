@@ -347,6 +347,7 @@ function forgetPageTextOnNavigation(tabId, newUrl) {
 
 // When a tab navigates or finishes loading, update its metadata
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
+  if (changeInfo.groupId !== undefined) await learnFromMove(tabId, changeInfo.groupId);
   if (changeInfo.url) await forgetPageTextOnNavigation(tabId, changeInfo.url);
   if (changeInfo.status !== 'complete') return;
 
@@ -421,17 +422,37 @@ function forgetPlacement(tabId) {
 
 const isSortable = (tab) => /^https?:/.test(tab.url || '') && !tab.pinned;
 
+// Threadline's own tab moves fire the same events as yours. While it is moving
+// tabs, and for a moment after, a tab changing group isn't taken as a correction.
+const OWN_EDIT_QUIET_MS = 1500;
+let ownEditsRunning = 0;
+let ownEditsQuietUntil = 0;
+
+async function asOwnEdit(action) {
+  ownEditsRunning++;
+  try {
+    return await action();
+  } finally {
+    ownEditsRunning--;
+    ownEditsQuietUntil = Date.now() + OWN_EDIT_QUIET_MS;
+  }
+}
+
+const isOwnEditMoment = () => ownEditsRunning > 0 || Date.now() < ownEditsQuietUntil;
+
 /** Chrome refuses tab changes while the user is dragging a tab, so try again. */
 async function editTabs(action) {
-  for (let attempt = 0; ; attempt++) {
-    try {
-      return await action();
-    } catch (err) {
-      const busy = /cannot be edited|dragging/i.test(err.message);
-      if (!busy || attempt >= TAB_EDIT_RETRIES) throw err;
-      await new Promise(resolve => setTimeout(resolve, TAB_EDIT_RETRY_MS));
+  return asOwnEdit(async () => {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await action();
+      } catch (err) {
+        const busy = /cannot be edited|dragging/i.test(err.message);
+        if (!busy || attempt >= TAB_EDIT_RETRIES) throw err;
+        await new Promise(resolve => setTimeout(resolve, TAB_EDIT_RETRY_MS));
+      }
     }
-  }
+  });
 }
 
 /** Starts the hidden page that runs the model, if it isn't already running. */
@@ -465,6 +486,8 @@ async function classifyInBackground(tabs) {
   await ensureClassifierPage();
   const response = await chrome.runtime.sendMessage({
     type: 'CLASSIFY_TABS',
+    corrections: await loadCorrections(),
+    useNano: await isNanoOn(),
     tabs: tabs.map(tab => {
       const saved = savedDetails(store, tab);
       return {
@@ -478,6 +501,7 @@ async function classifyInBackground(tabs) {
     }),
   });
   if (response?.error) throw new Error(response.error);
+  if (response.nano) await chrome.storage.session.set({ [NANO_STATUS_KEY]: response.nano });
   return response;
 }
 
@@ -808,6 +832,97 @@ chrome.alarms.onAlarm.addListener(async ({ name }) => {
   }
 });
 
+// ─── Corrections ──────────────────────────────────────────────────────────
+//
+// Drag a tab into another category's group, or pick a category for it in the
+// popup, and Threadline remembers that for the whole site (for YouTube, the
+// channel). Every open tab from that site moves too, and later ones follow.
+
+const CORRECTIONS_KEY = 'site_corrections';   // correctionKey → { category, subcategory?, at }
+const NANO_KEY = 'use_gemini_nano';
+const NANO_STATUS_KEY = 'gemini_nano_status';
+const SEARCH_SITES = /^(google\.[a-z.]+|bing\.com|duckduckgo\.com|search\.yahoo\.com)$/;
+
+/** Same as correctionKey in src/ml/categories.js, which this file can't import. */
+function correctionKey(tab) {
+  const host = safeHostname(tab.url).replace(/^www\./, '');
+  if (!host || !/^https?:/.test(tab.url || '') || SEARCH_SITES.test(host)) return null;
+  if (host === 'youtube.com' || host === 'm.youtube.com') {
+    const channel = (tab.channel || '').trim().toLowerCase();
+    return channel ? `youtube:${channel}` : null;
+  }
+  return host;
+}
+
+async function loadCorrections() {
+  const { [CORRECTIONS_KEY]: corrections } = await chrome.storage.local.get(CORRECTIONS_KEY);
+  return corrections || {};
+}
+
+async function isNanoOn() {
+  const { [NANO_KEY]: enabled } = await chrome.storage.local.get(NANO_KEY);
+  return enabled === true;
+}
+
+/**
+ * Remembers a category for a tab's site, and re-sorts every open tab from it.
+ * @returns {Promise<{ok:true, key:string}|{error:string}>}
+ */
+async function correctTab(tabId, category, subcategory = null) {
+  if (!KNOWN_GROUP_TITLES.has(category)) return { error: `Unknown category: ${category}` };
+  let tab;
+  try {
+    tab = await chrome.tabs.get(tabId);
+  } catch {
+    return { error: 'That tab is closed' };
+  }
+  const store = await loadTabStore();
+  const key = correctionKey({ url: tab.url, channel: savedDetails(store, tab).channel });
+  if (!key) return { error: "Searches and YouTube pages without a channel can't be remembered" };
+
+  await withStoreLock(async () => {
+    const corrections = await loadCorrections();
+    corrections[key] = { category, ...(subcategory && { subcategory }), at: Date.now() };
+    await chrome.storage.local.set({ [CORRECTIONS_KEY]: corrections });
+
+    // Sort again every open tab this applies to, including this one.
+    const placements = await loadPlacements();
+    for (const open of await chrome.tabs.query({})) {
+      const openKey = correctionKey({ url: open.url, channel: savedDetails(store, open).channel });
+      if (openKey === key && placements[open.id]) {
+        placements[open.id] = { ...placements[open.id], basis: null, manual: false };
+      }
+    }
+    await savePlacements(placements);
+  });
+  scheduleAutoSort();
+  return { ok: true, key };
+}
+
+async function forgetCorrection(key) {
+  await withStoreLock(async () => {
+    const corrections = await loadCorrections();
+    delete corrections[key];
+    await chrome.storage.local.set({ [CORRECTIONS_KEY]: corrections });
+  });
+  return { ok: true };
+}
+
+/** A tab you dragged into another category's group is a correction. */
+async function learnFromMove(tabId, groupId) {
+  if (groupId === -1 || isOwnEditMoment()) return;
+  let group;
+  try {
+    group = await chrome.tabGroups.get(groupId);
+  } catch {
+    return;
+  }
+  if (!KNOWN_GROUP_TITLES.has(group.title)) return; // your own group: just leave the tab there
+  const placement = (await loadPlacements())[tabId];
+  if (!placement?.category || placement.category === group.title) return;
+  await correctTab(tabId, group.title);
+}
+
 // ─── Snapshots ────────────────────────────────────────────────────────────
 //
 // A snapshot keeps a window's tabs in their order, with their groups, so an
@@ -884,7 +999,7 @@ async function restoreSnapshot(id) {
     if (match) {
       restored.push({ tabId: match.id, saved });
     } else if (canReopen(saved.url)) {
-      const tab = await chrome.tabs.create({ url: saved.url, windowId, active: false, pinned: saved.pinned });
+      const tab = await asOwnEdit(() => chrome.tabs.create({ url: saved.url, windowId, active: false, pinned: saved.pinned }));
       restored.push({ tabId: tab.id, saved });
       reopened++;
     } else {
@@ -933,6 +1048,8 @@ globalThis.threadline = {
   undoLastSort,
   saveSnapshot,
   restoreSnapshot,
+  correctTab,
+  correctionKey,
 };
 
 // ─── Message Handlers (from popup and content scripts) ────────────────────
@@ -966,13 +1083,15 @@ async function applyTabOrder(orderedTabIds) {
   ];
 
   let failed = 0;
-  for (const [id, index] of moves) {
-    try {
-      await chrome.tabs.move(id, { index: index - failed });
-    } catch {
-      failed++; // closed mid-loop: everything after it shifts left by one
+  await asOwnEdit(async () => {
+    for (const [id, index] of moves) {
+      try {
+        await chrome.tabs.move(id, { index: index - failed });
+      } catch {
+        failed++; // closed mid-loop: everything after it shifts left by one
+      }
     }
-  }
+  });
   return { ok: true, skipped: orderedTabIds.length - live.length + failed };
 }
 
@@ -1069,6 +1188,24 @@ async function handleMessage(message, sender) {
 
     case 'FOCUS_GO_BACK':
       return leaveBlockedPage(sender.tab?.id);
+
+    case 'CORRECT_TAB':
+      return correctTab(message.tabId, message.category, message.subcategory);
+
+    case 'GET_CORRECTIONS':
+      return { corrections: await loadCorrections() };
+
+    case 'FORGET_CORRECTION':
+      return forgetCorrection(message.key);
+
+    case 'SET_NANO':
+      await chrome.storage.local.set({ [NANO_KEY]: message.enabled === true });
+      return { ok: true };
+
+    case 'GET_NANO': {
+      const { [NANO_STATUS_KEY]: status } = await chrome.storage.session.get(NANO_STATUS_KEY);
+      return { enabled: await isNanoOn(), backgroundStatus: status || null };
+    }
 
     case 'SAVE_SNAPSHOT':
       return saveSnapshot(message.name);

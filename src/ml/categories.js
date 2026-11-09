@@ -326,30 +326,93 @@ export function closestDescription(vector, descriptions) {
 }
 
 /**
- * Classifies tabs, using the model only for those the rules can't settle.
+ * The key a correction is remembered under: the site, or for YouTube, the
+ * channel, since one site holds every kind of video. Null where a correction
+ * can't carry over to other pages: searches, and YouTube pages with no channel.
+ * background.js has a copy of this; a test checks they agree.
+ */
+export function correctionKey(tab) {
+  const host = hostOf(tab.url);
+  if (!host || !/^https?:/.test(tab.url || '') || SEARCH_ENGINES.test(host)) return null;
+  if (host === 'youtube.com' || host === 'm.youtube.com') {
+    const channel = (tab.channel || '').trim().toLowerCase();
+    return channel ? `youtube:${channel}` : null;
+  }
+  return host;
+}
+
+/** True if `answer` names a real category and one of its subcategories. */
+export function isValidAnswer(answer) {
+  const entry = CATEGORIES.find(c => c.name === answer?.category);
+  return Boolean(entry && answer.subcategory in entry.subcategories);
+}
+
+/**
+ * Classifies tabs. In order: your corrections, then the rules, then a model for
+ * whatever is left.
  *
  * @param {Array<{url:string, title?:string, description?:string, content?:string, channel?:string, youtubeCategory?:string}>} tabs
  * @param {(texts:string[]) => Promise<number[][]>} embed - function name kept
  *        out of this module so sites on the list never load the model
- * @param {{useRules?:boolean}} [options] - useRules:false measures the model alone
- * @returns {Promise<Array<{category:string, subcategory:string}>>} one per tab
+ * @param {object} [options]
+ * @param {boolean} [options.useRules] - false measures the model alone
+ * @param {Object<string, {category:string, subcategory?:string}>} [options.corrections]
+ *        correctionKey → what you said. Without a subcategory, the closest one
+ *        inside that category is picked.
+ * @param {(tabs:object[]) => Promise<Array<{category,subcategory}|null>>} [options.askModel]
+ *        another model to ask first (Gemini Nano). Any answer it can't give, or
+ *        gives wrongly, goes to the embedding model instead.
+ * @returns {Promise<Array<{category:string, subcategory:string, source:string}>>}
+ *        one per tab; source is correction, rules, nano or model
  */
-export async function classifyTabs(tabs, embed, { useRules = true } = {}) {
-  const decisions = tabs.map(tab => (useRules ? classifyByRules(tab) : { useModel: true }));
-  const needModel = decisions.flatMap((d, i) => (d.useModel ? [i] : []));
+export async function classifyTabs(tabs, embed, { useRules = true, corrections = {}, askModel = null } = {}) {
+  const decisions = tabs.map((tab) => {
+    if (!useRules) return { useModel: true };
+    const key = correctionKey(tab);
+    const corrected = key ? corrections[key] : null;
+    if (corrected && isValidAnswer(corrected)) return { ...corrected, source: 'correction' };
+    if (corrected && CATEGORIES.some(c => c.name === corrected.category)) return { useModel: true, onlyCategory: corrected.category };
+    const decision = classifyByRules(tab);
+    return decision.useModel ? decision : { ...decision, source: 'rules' };
+  });
 
+  // A model's answer still goes through the YouTube adjustments.
+  const settle = (tabIndex, answer, source) => {
+    const decision = decisions[tabIndex];
+    let result = { category: answer.category, subcategory: answer.subcategory, source };
+    if (decision.onYouTube && LEARNING_ON_YOUTUBE.has(result.subcategory)) result = { ...YOUTUBE_CODING, source };
+    decisions[tabIndex] = result;
+  };
+
+  const askable = decisions.flatMap((d, i) => (d.useModel && !d.onlyCategory ? [i] : []));
+  if (askModel && askable.length > 0) {
+    let answers = [];
+    try {
+      answers = (await askModel(askable.map(i => ({ ...tabs[i], query: decisions[i].text })))) || [];
+    } catch {
+      answers = []; // the other model failed: the embedding model answers everything
+    }
+    askable.forEach((tabIndex, n) => {
+      if (isValidAnswer(answers[n])) settle(tabIndex, answers[n], 'nano');
+    });
+  }
+
+  const needModel = decisions.flatMap((d, i) => (d.useModel ? [i] : []));
   if (needModel.length > 0) {
     const descriptions = await loadDescriptionVectors(embed);
     const vectors = await embed(needModel.map(i => decisions[i].text || classificationText(tabs[i])));
     needModel.forEach((tabIndex, n) => {
+      const { onlyCategory, defaultTo } = decisions[tabIndex];
+      if (onlyCategory) {
+        const closest = closestDescription(vectors[n], descriptions.filter(d => d.category === onlyCategory));
+        decisions[tabIndex] = { category: closest.category, subcategory: closest.subcategory, source: 'correction' };
+        return;
+      }
       const closest = closestDescription(vectors[n], descriptions);
-      const decision = decisions[tabIndex];
-      decisions[tabIndex] = closest.score >= MIN_CONFIDENCE ? closest : (decision.defaultTo || FALLBACK);
-      // A video about programming or an AI tool is for learning, not the tool itself.
-      if (decision.onYouTube && LEARNING_ON_YOUTUBE.has(decisions[tabIndex].subcategory)) decisions[tabIndex] = YOUTUBE_CODING;
+      settle(tabIndex, closest.score >= MIN_CONFIDENCE ? closest : (defaultTo || FALLBACK), 'model');
     });
   }
-  return decisions.map(({ category, subcategory }) => ({ category, subcategory }));
+  return decisions.map(({ category, subcategory, source }) => ({ category, subcategory, source }));
 }
 
 /** Everything the service worker needs to place a tab in the tab strip. */

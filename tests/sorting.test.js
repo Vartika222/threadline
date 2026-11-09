@@ -15,10 +15,15 @@ const RULES = {
   unsure: { category: 'Life & Other', subcategory: 'Unsure', color: 'green', categoryRank: 7, subcategoryRank: 4 },
 };
 const NAMES = ['Study', 'Work', 'Entertainment', 'Games', 'Social', 'Shopping & Art', 'News', 'Life & Other'];
+const BY_CATEGORY = { Study: RULES.study, 'Shopping & Art': RULES.shop, 'Life & Other': RULES.unsure };
 const classifier = (message) => ({
-  placements: message.tabs.map(tab => (tab.youtubeCategory === 'Education' || tab.content === 'about studying'
-    ? RULES.study
-    : RULES[new URL(tab.url).hostname.split('.')[0]] || RULES.unsure)),
+  placements: message.tabs.map(tab => {
+    const corrected = message.corrections?.[new URL(tab.url).hostname];
+    if (corrected) return BY_CATEGORY[corrected.category];
+    return tab.youtubeCategory === 'Education' || tab.content === 'about studying'
+      ? RULES.study
+      : RULES[new URL(tab.url).hostname.split('.')[0]] || RULES.unsure;
+  }),
   categoryNames: NAMES,
 });
 const tab = (id, site, extra = {}) => ({ id, title: site, url: `https://${site}.test/`, ...extra });
@@ -397,6 +402,78 @@ test('the popup can start focus with strict on, read it back, and end it', async
   assert(state.focus.category === 'Study' && state.strict === true, JSON.stringify(state));
   await send(listeners, { type: 'END_FOCUS' });
   assert((await send(listeners, { type: 'GET_FOCUS' })).focus === null, 'ended');
+});
+
+section('corrections');
+
+const quiet = () => new Promise(resolve => setTimeout(resolve, 1600)); // past Threadline's own moves
+const dragInto = async (listeners, openTabs, tabId, groupId) => {
+  const t = openTabs.find(x => x.id === tabId);
+  t.groupId = groupId;
+  await listeners.onUpdated[0](tabId, { groupId }, t);
+};
+
+test('dragging a tab into another category group remembers it, and moves the rest of the site', async () => {
+  const { api, listeners, openTabs, groups } = await boot([tab(1, 'shop'), tab(2, 'study'), { id: 3, title: 'more', url: 'https://shop.test/other' }]);
+  await api.runAutoSort();
+  await quiet();
+  const studyGroup = groups.find(g => g.title === 'Study').id;
+  await dragInto(listeners, openTabs, 1, studyGroup);
+  const { corrections } = await send(listeners, { type: 'GET_CORRECTIONS' });
+  assert(corrections['shop.test']?.category === 'Study', JSON.stringify(corrections));
+  await api.runAutoSort();
+  assert(openTabs.find(t => t.id === 3).groupId === studyGroup, 'the other shop.test tab followed');
+});
+
+test("Threadline's own sorting is never taken as a correction", async () => {
+  const { api, listeners, openTabs, groups } = await boot([tab(1, 'shop'), tab(2, 'study')]);
+  await api.runAutoSort();
+  const studyGroup = groups.find(g => g.title === 'Study').id;
+  await dragInto(listeners, openTabs, 1, studyGroup); // straight after its own moves
+  const { corrections } = await send(listeners, { type: 'GET_CORRECTIONS' });
+  assert(Object.keys(corrections).length === 0, JSON.stringify(corrections));
+});
+
+test('dragging into a group you made yourself is not a correction', async () => {
+  const { api, listeners, openTabs, groups } = await boot([tab(1, 'shop')]);
+  await api.runAutoSort();
+  await quiet();
+  groups.push({ id: 60, windowId: 1, title: 'Mine', color: 'red', collapsed: false });
+  await dragInto(listeners, openTabs, 1, 60);
+  const { corrections } = await send(listeners, { type: 'GET_CORRECTIONS' });
+  assert(Object.keys(corrections).length === 0, JSON.stringify(corrections));
+});
+
+test('picking a category in the popup moves the tab and can be forgotten', async () => {
+  const { api, listeners, openTabs, groups } = await boot([tab(1, 'shop')]);
+  await api.runAutoSort();
+  const reply = await send(listeners, { type: 'CORRECT_TAB', tabId: 1, category: 'Study' });
+  assert(reply.ok && reply.key === 'shop.test', JSON.stringify(reply));
+  await api.runAutoSort();
+  assert(openTabs[0].groupId === groups.find(g => g.title === 'Study')?.id, groupTitles({ groups }));
+  await send(listeners, { type: 'FORGET_CORRECTION', key: 'shop.test' });
+  assert(Object.keys((await send(listeners, { type: 'GET_CORRECTIONS' })).corrections).length === 0, 'forgotten');
+  const bad = await send(listeners, { type: 'CORRECT_TAB', tabId: 1, category: 'Nonsense' });
+  assert(bad.error, 'unknown category refused');
+});
+
+test('background.js and categories.js agree on what a correction is kept under', async () => {
+  const { api } = await boot([]);
+  const { correctionKey } = await import('../src/ml/categories.js');
+  for (const t of [
+    { url: 'https://www.hotstar.com/in/home' }, { url: 'https://in.pinterest.com/' },
+    { url: 'https://www.youtube.com/watch?v=a', channel: 'Manware' }, { url: 'https://www.youtube.com/' },
+    { url: 'https://www.google.co.in/search?q=x' }, { url: 'https://gemini.google.com/app' }, { url: 'chrome://newtab/' },
+  ]) {
+    assert(api.correctionKey(t) === correctionKey(t), `${t.url}: ${api.correctionKey(t)} vs ${correctionKey(t)}`);
+  }
+});
+
+test('Gemini Nano is off by default and can be switched on', async () => {
+  const { listeners } = await boot([]);
+  assert((await send(listeners, { type: 'GET_NANO' })).enabled === false, 'off');
+  await send(listeners, { type: 'SET_NANO', enabled: true });
+  assert((await send(listeners, { type: 'GET_NANO' })).enabled === true, 'on');
 });
 
 done();

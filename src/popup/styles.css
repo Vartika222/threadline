@@ -583,3 +583,32 @@ body {
 }
 .small-btn:hover { border-color: var(--accent-light); color: var(--text-primary); }
 .small-btn.danger:hover { border-color: var(--error); color: var(--error); }
+
+/* ── CORRECTIONS AND MODEL PAGE ───────────────────── */
+
+.category-select {
+  margin-left: auto;
+  flex: none;
+  max-width: 108px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-size: 10px;
+  padding: 2px 4px;
+}
+.category-select:focus { outline: none; border-color: var(--accent-light); }
+.progress-bar { height: 6px; background: var(--bg-card); border-radius: 999px; overflow: hidden; }
+.progress-bar > div { height: 100%; background: var(--accent); transition: width 0.3s; }
+.compare { display: flex; flex-direction: column; gap: 8px; }
+.compare-row {
+  padding: 8px 10px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-accent);
+  border-radius: var(--radius-sm);
+}
+.compare-same { border-color: var(--border); opacity: 0.8; }
+.compare-answers { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.compare-answers .chip { font-size: 10px; padding: 3px 7px; border-radius: var(--radius-sm); text-align: left; }
+
+.tab-item .tab-title { flex: 1; min-width: 0; }

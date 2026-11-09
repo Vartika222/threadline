@@ -4,7 +4,7 @@
  */
 import {
   CATEGORIES, KNOWN_SITES, classifyByRules, classifyTabs, cleanTitle, classificationText,
-  closestDescription, placementFor, MIN_CONFIDENCE,
+  closestDescription, placementFor, MIN_CONFIDENCE, correctionKey, isValidAnswer,
 } from '../src/ml/categories.js';
 import { makeRunner, assert } from './helpers/chromeMock.js';
 
@@ -214,4 +214,64 @@ test('gives colour and ranks for the tab strip', () => {
   assert(p.color === 'blue' && p.categoryRank === 0 && p.subcategoryRank === 2, JSON.stringify(p));
 });
 
-await done();
+await section('corrections');
+
+test('corrections are kept per site, per YouTube channel, and never for searches', () => {
+  assert(correctionKey({ url: 'https://www.hotstar.com/in/home' }) === 'hotstar.com', 'site');
+  assert(correctionKey({ url: 'https://in.pinterest.com/x' }) === 'in.pinterest.com', 'subdomain kept');
+  assert(correctionKey({ url: 'https://www.youtube.com/watch?v=a', channel: ' Manware ' }) === 'youtube:manware', 'channel');
+  assert(correctionKey({ url: 'https://www.youtube.com/' }) === null, 'YouTube without a channel');
+  assert(correctionKey({ url: 'https://www.google.com/search?q=a' }) === null, 'search');
+  assert(correctionKey({ url: 'chrome://settings' }) === null, 'browser page');
+});
+
+const chatEmbed = async (texts) => texts.map(text => (/chat|messag/i.test(text) ? [1, 0] : [0, 1]));
+
+test('a correction beats the known sites list', async () => {
+  const [hotstar] = await classifyTabs([{ url: 'https://www.hotstar.com/' }], chatEmbed,
+    { corrections: { 'hotstar.com': { category: 'Study', subcategory: 'Courses & Lectures' } } });
+  assert(hotstar.category === 'Study' && hotstar.source === 'correction', JSON.stringify(hotstar));
+});
+
+test('a correction naming only a category picks the closest subcategory inside it', async () => {
+  const [tab] = await classifyTabs([{ url: 'https://unknown.example/', title: 'chat with friends' }], chatEmbed,
+    { corrections: { 'unknown.example': { category: 'Work' } } });
+  assert(tab.category === 'Work' && tab.source === 'correction', JSON.stringify(tab));
+});
+
+test('a YouTube channel correction applies to its videos', async () => {
+  const [video] = await classifyTabs([{ url: 'https://www.youtube.com/watch?v=b', channel: 'Manware', youtubeCategory: 'Comedy' }], chatEmbed,
+    { corrections: { 'youtube:manware': { category: 'Study', subcategory: 'Practice & Coding Prep' } } });
+  is(video, 'Study', 'Practice & Coding Prep');
+});
+
+section('a second model (Gemini Nano)');
+
+test('its answers are used for tabs the rules leave open, not for known sites', async () => {
+  const asked = [];
+  const askModel = async (list) => { asked.push(...list.map(t => t.url)); return list.map(() => ({ category: 'News', subcategory: 'General' })); };
+  const [known, unknown] = await classifyTabs([{ url: 'https://github.com/' }, { url: 'https://unknown.example/', title: 'x' }], chatEmbed, { askModel });
+  assert(asked.join() === 'https://unknown.example/', asked.join());
+  assert(known.source === 'rules' && unknown.category === 'News' && unknown.source === 'nano', JSON.stringify([known, unknown]));
+});
+
+test('a made-up or missing answer falls back to the embedding model', async () => {
+  const askModel = async () => [{ category: 'News', subcategory: 'Gossip' }, null];
+  const results = await classifyTabs([{ url: 'https://a.example/', title: 'x' }, { url: 'https://b.example/', title: 'y' }], chatEmbed, { askModel });
+  assert(results.every(r => r.source === 'model'), JSON.stringify(results));
+  assert(!isValidAnswer({ category: 'News', subcategory: 'Gossip' }) && isValidAnswer({ category: 'News', subcategory: 'General' }), 'validity');
+});
+
+test('if the second model fails, the embedding model answers everything', async () => {
+  const askModel = async () => { throw new Error('model crashed'); };
+  const [tab] = await classifyTabs([{ url: 'https://a.example/', title: 'x' }], chatEmbed, { askModel });
+  assert(tab.source === 'model', JSON.stringify(tab));
+});
+
+test('its YouTube answers get the same adjustments', async () => {
+  const askModel = async (list) => list.map(() => ({ category: 'Work', subcategory: 'AI Tools' }));
+  const [video] = await classifyTabs([{ url: 'https://www.youtube.com/watch?v=a', title: 'ChatGPT explained', youtubeCategory: 'People & Blogs' }], chatEmbed, { askModel });
+  is(video, 'Study');
+});
+
+done();

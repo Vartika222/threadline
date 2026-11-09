@@ -60,7 +60,19 @@ Chrome Web Store.
    that were closed, and recreates the groups; automatic sorting then leaves those
    tabs where they are until they navigate somewhere new. **Undo** reverses a
    restore. The last 20 snapshots are kept.
-7. **Personalise (optional, off by default).** Tick **Personalise sorting
+7. **Corrections.** Drag a tab into another category's group, or pick a category
+   from the menu next to it on the popup's **Tabs** page, and Threadline remembers it
+   for the whole site (for YouTube, for that channel). Every open tab from that site
+   moves too, and later ones follow. The **Model** page lists what's remembered and
+   can forget any of it. Threadline's own moves never count as corrections.
+8. **Gemini Nano (experimental, off by default).** The **Model** page can download
+   Chrome's built-in language model (free, runs on this computer) and use it for tabs
+   the site list and your corrections don't settle. It needs Chrome 138+, 22 GB free
+   disk space and 16 GB of memory or a GPU with more than 4 GB. **Compare with the
+   current model on my tabs** shows both answers side by side so you can mark which is
+   right and copy the results. If Gemini Nano isn't there, is slow (over 20 s), or gives
+   an answer outside the categories, the current model answers instead.
+9. **Personalise (optional, off by default).** Tick **Personalise sorting
    (experimental)** in the popup and Threadline learns from your drags and from
    switching back and forth between two tabs. This only affects the order inside a
    subcategory, and it hasn't been shown to help (see Evaluation).
@@ -207,7 +219,9 @@ See [CODE_GUIDE.md](CODE_GUIDE.md) for a guided tour of the code and
 - Snapshots restore into the current window only, and a restored tab that redirects
   to a different address loses its protection from automatic sorting.
 - **Categories will sometimes be wrong**, especially for sites that aren't on the known
-  list, and there's no way yet to correct one and have it remembered.
+  list. Correct one once and it's remembered for that site.
+- Gemini Nano hasn't been measured against the current model yet: use the comparison
+  on the Model page. It only reads English, Japanese, Spanish, German and French.
 - Short searches give the model little to go on, so a vague one can land in the wrong
   category.
 - YouTube's category for a video is whatever the uploader picked, and is read from
