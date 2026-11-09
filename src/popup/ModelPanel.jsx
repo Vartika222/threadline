@@ -15,7 +15,7 @@ const STATUS_TEXT = {
   unsupported: "This version of Chrome doesn't offer Gemini Nano to extensions.",
   unavailable: "This computer can't run Gemini Nano. Chrome needs 22 GB of free disk space, and 16 GB of memory or a graphics card with more than 4 GB.",
   downloadable: 'Gemini Nano is free and runs on this computer. Chrome downloads it once (several GB).',
-  downloading: 'Chrome is downloading Gemini Nano…',
+  downloading: 'Chrome is downloading Gemini Nano. It is several GB, so this can take a while; it carries on with this popup closed.',
   available: 'Gemini Nano is ready on this computer.',
   'no-answer': "Chrome didn't say whether Gemini Nano is available. Make sure Chrome is up to date, then open this page again.",
 };
@@ -43,6 +43,15 @@ export default function ModelPanel() {
   }
 
   useEffect(() => { refresh(); }, []);
+
+  // While Chrome downloads, check again every few seconds.
+  useEffect(() => {
+    if (status !== 'downloading') return undefined;
+    const timer = setInterval(async () => setStatus(await nanoStatus()), 5000);
+    return () => clearInterval(timer);
+  }, [status]);
+
+  const openStatusPage = () => chrome.tabs.create({ url: 'chrome://on-device-internals' });
 
   async function handleDownload() {
     setError(null);
@@ -117,8 +126,21 @@ export default function ModelPanel() {
       {status === 'downloadable' && (
         <button className="apply-btn wide" onClick={handleDownload}>Download Gemini Nano</button>
       )}
-      {status === 'downloading' && progress !== null && (
-        <div className="progress-bar"><div style={{ width: `${Math.round(progress * 100)}%` }} /></div>
+      {status === 'downloading' && (
+        <>
+          {progress !== null ? (
+            <>
+              <div className="progress-bar"><div style={{ width: `${Math.round(progress * 100)}%` }} /></div>
+              <div className="snapshot-meta">{Math.round(progress * 100)}% downloaded</div>
+            </>
+          ) : (
+            <button className="apply-btn wide" onClick={handleDownload}>Show download progress</button>
+          )}
+          <button className="cancel-btn wide" onClick={openStatusPage}>Open Chrome's model status page</button>
+        </>
+      )}
+      {(status === 'unavailable' || status === 'no-answer') && (
+        <button className="cancel-btn wide" onClick={openStatusPage}>Open Chrome's model status page</button>
       )}
 
       {status === 'available' && (
