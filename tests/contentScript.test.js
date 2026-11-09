@@ -42,7 +42,7 @@ function el(tag, ...parts) {
 }
 
 /** Loads the script into a fresh fake page. */
-function loadPage({ elements = [], hidden = false } = {}) {
+function loadPage({ elements = [], hidden = false, href = 'https://example.com/', meta = {}, fetch } = {}) {
   let now = 0;
   const docListeners = {};
   const winListeners = {};
@@ -55,16 +55,16 @@ function loadPage({ elements = [], hidden = false } = {}) {
   const document = {
     hidden,
     title: 'Page title',
-    querySelector: () => null,
+    querySelector: (selector) => (selector in meta ? { content: meta[selector] } : null),
     querySelectorAll: (selector) => el('body', ...elements).querySelectorAll(selector),
     addEventListener: (type, fn) => { docListeners[type] = fn; },
   };
   const window = {
-    location: { href: 'https://example.com/', hostname: 'example.com' },
+    location: { href, hostname: new URL(href).hostname },
     addEventListener: (type, fn) => { winListeners[type] = fn; },
   };
   vm.runInNewContext(source, {
-    document, window, Date: FakeDate, Array, setTimeout: () => {},
+    document, window, Date: FakeDate, Array, URL, fetch, setTimeout: () => {},
     chrome: { runtime: { sendMessage: () => Promise.resolve(), onMessage: { addListener: fn => { onMessage = fn; } } } },
   });
 
@@ -74,6 +74,8 @@ function loadPage({ elements = [], hidden = false } = {}) {
     return reply;
   };
   return {
+    request: () => new Promise(resolve => onMessage({ type: 'REQUEST_TAB_DATA' }, {}, resolve)),
+    go: (url) => { window.location.href = url; },
     at: (ms) => { now = ms; },
     hide: () => { document.hidden = true; docListeners.visibilitychange(); },
     show: () => { document.hidden = false; docListeners.visibilitychange(); },
@@ -178,4 +180,44 @@ test('extraction leaves the live page untouched', () => {
   assert(para.parts.includes(style), 'the style tag must stay in the real page');
 });
 
-await done();
+await section('YouTube');
+
+const GENRE = 'meta[itemprop="genre"]';
+const videoPage = (category, channel) => `<script>var ytInitialPlayerResponse = {"microformat":{"category":"${category}","ownerChannelName":"${channel}"}};</script>`;
+
+test('a video opened directly uses the category on its own page, with no download', async () => {
+  let fetched = 0;
+  const page = loadPage({ href: 'https://www.youtube.com/watch?v=first', meta: { [GENRE]: 'Education' }, fetch: async () => { fetched++; } });
+  const data = await page.request();
+  assert(data.youtubeCategory === 'Education', JSON.stringify(data));
+  assert(fetched === 0, `fetched ${fetched} times`);
+});
+
+test('a video reached inside YouTube is looked up on its own page, once', async () => {
+  const asked = [];
+  const fetch = async (url) => { asked.push(url); return { text: async () => videoPage('Music', 'Rick Astley \\u0026 Friends') }; };
+  const page = loadPage({ href: 'https://www.youtube.com/watch?v=first', meta: { [GENRE]: 'Education' }, fetch });
+  page.go('https://www.youtube.com/watch?v=second&t=30');
+  const data = await page.request();
+  assert(data.youtubeCategory === 'Music', JSON.stringify(data));
+  assert(data.channel === 'Rick Astley & Friends', data.channel);
+  await page.request();
+  assert(asked.length === 1 && asked[0] === '/watch?v=second', JSON.stringify(asked));
+});
+
+test('a failed lookup still sends the page, and is tried again later', async () => {
+  let calls = 0;
+  const fetch = async () => { calls++; throw new Error('offline'); };
+  const page = loadPage({ href: 'https://www.youtube.com/shorts/abc', fetch });
+  const data = await page.request();
+  assert(data.content && data.youtubeCategory === undefined, JSON.stringify(data));
+  await page.request();
+  assert(calls === 2, `tried ${calls} times`);
+});
+
+test('other sites never fetch anything', async () => {
+  const page = loadPage({ fetch: async () => { throw new Error('should not fetch'); } });
+  assert((await page.request()).youtubeCategory === undefined, 'no category');
+});
+
+done();

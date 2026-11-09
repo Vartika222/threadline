@@ -5,6 +5,7 @@
  *
  *   1. Mixed sites (YouTube, search engines) are judged by what's open in the
  *      tab, because the site alone says nothing about the content.
+ *      A YouTube video goes by its channel, then by the category YouTube lists.
  *   2. Known sites come from a hand-made list. Fast, and needs no model.
  *   3. Anything else is compared with written descriptions of each subcategory,
  *      using the language model, and takes the closest match. If nothing is
@@ -41,6 +42,7 @@ export const CATEGORIES = [
       'Streaming': ['watch movies, TV shows and web series online', 'video streaming service', 'anime and live streams', 'celebrity gossip, comedy and funny videos'],
       'Music': ['listen to music, songs and podcasts', 'official music video and song'],
       'Sports': ['live sports scores, cricket and football'],
+      'Reading': ['read stories, novels, fan fiction and webcomics online'],
     },
   },
   {
@@ -112,6 +114,8 @@ export const KNOWN_SITES = {
   'geeksforgeeks.org': ['Study', 'Practice & Coding Prep'], 'codecademy.com': ['Study', 'Practice & Coding Prep'],
   'w3schools.com': ['Study', 'Practice & Coding Prep'], 'codechef.com': ['Study', 'Practice & Coding Prep'],
   'codeforces.com': ['Study', 'Practice & Coding Prep'], 'quizlet.com': ['Study', 'Practice & Coding Prep'],
+  'codolio.com': ['Study', 'Practice & Coding Prep'], 'takeuforward.org': ['Study', 'Practice & Coding Prep'],
+  'interviewbit.com': ['Study', 'Practice & Coding Prep'],
   'wikipedia.org': ['Study', 'Reference'], 'britannica.com': ['Study', 'Reference'],
   'arxiv.org': ['Study', 'Science'], 'nature.com': ['Study', 'Science'], 'scholar.google.com': ['Study', 'Science'],
   // Work
@@ -129,6 +133,9 @@ export const KNOWN_SITES = {
   'primevideo.com': ['Entertainment', 'Streaming'], 'hulu.com': ['Entertainment', 'Streaming'],
   'disneyplus.com': ['Entertainment', 'Streaming'], 'sonyliv.com': ['Entertainment', 'Streaming'],
   'zee5.com': ['Entertainment', 'Streaming'], 'crunchyroll.com': ['Entertainment', 'Streaming'],
+  'wattpad.com': ['Entertainment', 'Reading'], 'webtoons.com': ['Entertainment', 'Reading'],
+  'archiveofourown.org': ['Entertainment', 'Reading'], 'fanfiction.net': ['Entertainment', 'Reading'],
+  'royalroad.com': ['Entertainment', 'Reading'], 'pratilipi.com': ['Entertainment', 'Reading'],
   'twitch.tv': ['Entertainment', 'Streaming'], 'imdb.com': ['Entertainment', 'Streaming'],
   'spotify.com': ['Entertainment', 'Music'], 'gaana.com': ['Entertainment', 'Music'],
   'jiosaavn.com': ['Entertainment', 'Music'], 'music.youtube.com': ['Entertainment', 'Music'],
@@ -156,7 +163,7 @@ export const KNOWN_SITES = {
   'behance.net': ['Shopping & Art', 'Art & Design'], 'dribbble.com': ['Shopping & Art', 'Art & Design'], 'artstation.com': ['Shopping & Art', 'Art & Design'],
   'deviantart.com': ['Shopping & Art', 'Art & Design'], 'moma.org': ['Shopping & Art', 'Art & Design'],
   // News
-  'bbc.com': ['News', 'General'], 'bbc.co.uk': ['News', 'General'], 'nytimes.com': ['News', 'General'], 'theguardian.com': ['News', 'General'],
+  'pudding.cool': ['News', 'General'], 'bbc.com': ['News', 'General'], 'bbc.co.uk': ['News', 'General'], 'nytimes.com': ['News', 'General'], 'theguardian.com': ['News', 'General'],
   'reuters.com': ['News', 'General'], 'thehindu.com': ['News', 'General'], 'ndtv.com': ['News', 'General'],
   'indiatimes.com': ['News', 'General'], 'indianexpress.com': ['News', 'General'], 'cnn.com': ['News', 'General'], 'aljazeera.com': ['News', 'General'],
   // Life & Other
@@ -175,6 +182,28 @@ export const STUDY_CHANNELS = new Set([
   'abdul bari', 'statquest with josh starmer', 'sentdex', 'corey schafer', 'ted-ed', 'veritasium', 'organic chemistry tutor',
   'the organic chemistry tutor', 'professor leonard', 'traversy media', 'programming with mosh', 'fireship',
 ]);
+
+/**
+ * YouTube's own category for a video, as the uploader chose it, read from the
+ * video's page. Categories missing here (People & Blogs, Science & Technology,
+ * Howto & Style, ...) cover too many kinds of video, so the model decides those.
+ */
+export const YOUTUBE_CATEGORIES = {
+  'Education': { category: 'Study', subcategory: 'Courses & Lectures' },
+  'Music': { category: 'Entertainment', subcategory: 'Music' },
+  'Gaming': { category: 'Games', subcategory: 'Gaming News' },
+  'Sports': { category: 'Entertainment', subcategory: 'Sports' },
+  'News & Politics': { category: 'News', subcategory: 'General' },
+  'Film & Animation': { category: 'Entertainment', subcategory: 'Streaming' },
+  'Comedy': { category: 'Entertainment', subcategory: 'Streaming' },
+  'Entertainment': { category: 'Entertainment', subcategory: 'Streaming' },
+  'Shows': { category: 'Entertainment', subcategory: 'Streaming' },
+  'Trailers': { category: 'Entertainment', subcategory: 'Streaming' },
+  'Movies': { category: 'Entertainment', subcategory: 'Streaming' },
+};
+
+const YOUTUBE_DEFAULT = { category: 'Entertainment', subcategory: 'Streaming' };
+const YOUTUBE_CODING = { category: 'Study', subcategory: 'Courses & Lectures' };
 
 // A page that refused to load says nothing about the site, so don't guess from it.
 const REFUSED_PAGE = /^(access (to this page has been )?denied|just a moment|attention required|are you a robot|verify you are human|403\b|404\b|page not found)/i;
@@ -225,19 +254,27 @@ export function classifyByRules(tab) {
   const host = hostOf(tab.url);
 
   if (host === 'youtube.com' || host === 'm.youtube.com') {
-    const isVideo = /^\/(watch|shorts|live)\b/.test(new URL(tab.url).pathname);
-    if (!isVideo) return { category: 'Entertainment', subcategory: 'Streaming' };
+    const { pathname } = new URL(tab.url);
+    const isVideo = /^\/(watch|shorts|live)\b/.test(pathname);
+    const isChannel = /^\/(@|channel\/|c\/|user\/)/.test(pathname);
+    if (!isVideo && !isChannel) return YOUTUBE_DEFAULT; // home, subscriptions, ...
     if (STUDY_CHANNELS.has((tab.channel || '').trim().toLowerCase())) {
       return { category: 'Study', subcategory: 'Courses & Lectures' };
     }
-    // A video the model isn't sure about is still most likely entertainment.
-    return { useModel: true, defaultTo: { category: 'Entertainment', subcategory: 'Streaming' } };
+    if (isVideo && YOUTUBE_CATEGORIES[tab.youtubeCategory]) return YOUTUBE_CATEGORIES[tab.youtubeCategory];
+    // A video or channel the model isn't sure about is still most likely entertainment.
+    return { useModel: true, defaultTo: YOUTUBE_DEFAULT, onYouTube: true };
   }
 
   const known = lookUpKnownSite(host);
   if (known) return known;
 
   if (REFUSED_PAGE.test(cleanTitle(tab.title))) return FALLBACK;
+
+  // A company's careers pages are about the job, whatever the company does.
+  if (/^(careers|jobs)\./.test(host) || /\/(careers|jobs)(\/|$)/i.test(new URL(tab.url).pathname)) {
+    return { category: 'Work', subcategory: 'Jobs' };
+  }
 
   if (SEARCH_ENGINES.test(host)) {
     // Judge a search by what was searched for. A search homepage has no topic.
@@ -278,7 +315,7 @@ export function closestDescription(vector, descriptions) {
 /**
  * Classifies tabs, using the model only for those the rules can't settle.
  *
- * @param {Array<{url:string, title?:string, description?:string, content?:string, channel?:string}>} tabs
+ * @param {Array<{url:string, title?:string, description?:string, content?:string, channel?:string, youtubeCategory?:string}>} tabs
  * @param {(texts:string[]) => Promise<number[][]>} embed - function name kept
  *        out of this module so sites on the list never load the model
  * @param {{useRules?:boolean}} [options] - useRules:false measures the model alone
@@ -293,9 +330,10 @@ export async function classifyTabs(tabs, embed, { useRules = true } = {}) {
     const vectors = await embed(needModel.map(i => decisions[i].text || classificationText(tabs[i])));
     needModel.forEach((tabIndex, n) => {
       const closest = closestDescription(vectors[n], descriptions);
-      decisions[tabIndex] = closest.score >= MIN_CONFIDENCE
-        ? closest
-        : (decisions[tabIndex].defaultTo || FALLBACK);
+      const decision = decisions[tabIndex];
+      decisions[tabIndex] = closest.score >= MIN_CONFIDENCE ? closest : (decision.defaultTo || FALLBACK);
+      // A programming video on YouTube is for learning, not a developer tool.
+      if (decision.onYouTube && decisions[tabIndex].subcategory === 'Developer Tools') decisions[tabIndex] = YOUTUBE_CODING;
     });
   }
   return decisions.map(({ category, subcategory }) => ({ category, subcategory }));

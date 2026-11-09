@@ -23,6 +23,9 @@ for (const [url, category, subcategory] of [
   ['https://in.pinterest.com/', 'Social', 'Inspiration'],
   ['https://discord.com/channels/@me', 'Social', 'Messaging'],
   ['https://www.whistles.com/', 'Shopping & Art', 'Clothing'],
+  ['https://codolio.com/dashboard', 'Study', 'Practice & Coding Prep'],
+  ['https://www.wattpad.com/', 'Entertainment', 'Reading'],
+  ['https://pudding.cool/2026/11/pi/', 'News', 'General'],
 ]) {
   test(`${new URL(url).hostname} → ${category} › ${subcategory}`, () => is(classifyByRules({ url }), category, subcategory));
 }
@@ -42,6 +45,49 @@ test('other videos are judged by the model, defaulting to Entertainment', () => 
   const decision = classifyByRules({ url: 'https://www.youtube.com/watch?v=a', channel: 'Some Vlogger' });
   assert(decision.useModel === true, 'should use the model');
   is(decision.defaultTo, 'Entertainment');
+});
+
+test("YouTube's own category decides a video: Education goes to Study", () => {
+  const video = (youtubeCategory) => classifyByRules({ url: 'https://www.youtube.com/watch?v=a', channel: 'Some Channel', youtubeCategory });
+  is(video('Education'), 'Study', 'Courses & Lectures');
+  is(video('Music'), 'Entertainment', 'Music');
+  is(video('Gaming'), 'Games');
+  is(video('News & Politics'), 'News');
+  is(video('Comedy'), 'Entertainment', 'Streaming');
+});
+
+test('broad YouTube categories are left to the model', () => {
+  for (const youtubeCategory of ['People & Blogs', 'Science & Technology', 'Howto & Style', '']) {
+    const decision = classifyByRules({ url: 'https://www.youtube.com/watch?v=a', youtubeCategory });
+    assert(decision.useModel === true, youtubeCategory);
+    is(decision.defaultTo, 'Entertainment');
+  }
+});
+
+test('a study channel beats the category the uploader picked', () => {
+  is(classifyByRules({ url: 'https://www.youtube.com/watch?v=a', channel: 'freeCodeCamp.org', youtubeCategory: 'Entertainment' }), 'Study');
+});
+
+test('a channel page is judged by the channel, not sent to Entertainment', () => {
+  const decision = classifyByRules({ url: 'https://www.youtube.com/@IAmManware/videos', channel: 'Manware' });
+  assert(decision.useModel === true, JSON.stringify(decision));
+  is(classifyByRules({ url: 'https://www.youtube.com/@nptel', channel: 'NPTEL' }), 'Study');
+});
+
+test('a programming video on YouTube counts as Study, not Developer Tools', async () => {
+  const embed = async (texts) => texts.map(text => (/software development tools|PostgreSQL/.test(text) ? [1, 0] : [0, 1]));
+  const [video, site] = await classifyTabs([
+    { url: 'https://www.youtube.com/watch?v=a', title: 'PostgreSQL for beginners' },
+    { url: 'https://unknown.example/', title: 'PostgreSQL hosting' },
+  ], embed);
+  is(video, 'Study', 'Courses & Lectures');
+  is(site, 'Work');
+});
+
+test('careers pages go to Work › Jobs', () => {
+  is(classifyByRules({ url: 'https://careers.ibm.com/en_US/careers/JobDetail?jobId=1' }), 'Work', 'Jobs');
+  is(classifyByRules({ url: 'https://www.example.com/careers/' }), 'Work', 'Jobs');
+  assert(classifyByRules({ url: 'https://www.example.com/careersblog' }).useModel, 'only a whole path segment counts');
 });
 
 test('YouTube Music counts as Music', () => {

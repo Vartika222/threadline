@@ -341,6 +341,7 @@ function forgetPageTextOnNavigation(tabId, newUrl) {
     entry.content = '';
     entry.description = '';
     entry.channel = '';
+    entry.youtubeCategory = '';
   });
 }
 
@@ -374,9 +375,10 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
 // ─── Automatic Sorting ────────────────────────────────────────────────────
 //
 // When a tab finishes loading, it moves into a named tab group for its category.
-// Only tabs on a new URL are touched, so everything else stays put, and if you
-// move a tab by hand it stays there until it navigates somewhere new. Groups
-// you made yourself are never changed.
+// Only tabs on a new URL are touched, or tabs whose details only arrived after
+// they were sorted (page text, a YouTube channel or category), so everything
+// else stays put. If you move a tab by hand it stays there until it navigates
+// somewhere new. Groups you made yourself are never changed.
 
 const AUTO_SORT_KEY = 'auto_sort_enabled';
 const PLACEMENTS_KEY = 'tab_placements';   // tabId → { url, category, subcategory, ... }
@@ -442,19 +444,36 @@ async function ensureClassifierPage() {
   });
 }
 
+/** What the content script saved for a tab, if it is about the page open now. */
+function savedDetails(store, tab) {
+  const saved = store[tab.id];
+  return saved && withoutHash(saved.url) === withoutHash(tab.url) ? saved : {};
+}
+
+/**
+ * The details a tab was sorted on. When this changes, for example YouTube's
+ * category for a video arrives a second after the video opened, the tab is
+ * sorted again. The title isn't part of it: many titles keep changing.
+ */
+function sortBasis(store, tab) {
+  const saved = savedDetails(store, tab);
+  return [saved.content ? 'text' : '', saved.channel || '', saved.youtubeCategory || ''].join('|');
+}
+
 async function classifyInBackground(tabs) {
   const store = await loadTabStore();
   await ensureClassifierPage();
   const response = await chrome.runtime.sendMessage({
     type: 'CLASSIFY_TABS',
     tabs: tabs.map(tab => {
-      const saved = store[tab.id] || {};
+      const saved = savedDetails(store, tab);
       return {
         url: tab.url,
         title: tab.title,
         description: saved.description || '',
         content: saved.content || '',
         channel: saved.channel || '',
+        youtubeCategory: saved.youtubeCategory || '',
       };
     }),
   });
@@ -475,10 +494,14 @@ async function runAutoSort() {
     const store = await loadTabStore();
     // A page can stay "loading" for a long time on ads and video. Once its text
     // has arrived, there's enough to sort it.
-    const isReady = (tab) => tab.status !== 'loading'
-      || (store[tab.id]?.content && withoutHash(store[tab.id].url) === withoutHash(tab.url));
-    const tabs = (await chrome.tabs.query({})).filter(tab =>
-      isSortable(tab) && isReady(tab) && placements[tab.id]?.url !== withoutHash(tab.url));
+    // A YouTube video waits for its channel and category, so it doesn't land in
+    // Entertainment first and jump to Study a second later.
+    const hasText = (tab) => Boolean(savedDetails(store, tab).content);
+    const isYouTubeVideo = (tab) => /^https:\/\/(www\.|m\.)?youtube\.com\/(watch|shorts\/|live\/)/.test(tab.url || '');
+    const isReady = (tab) => hasText(tab) || (tab.status !== 'loading' && !isYouTubeVideo(tab));
+    const isSorted = (tab) => placements[tab.id]?.url === withoutHash(tab.url)
+      && placements[tab.id]?.basis === sortBasis(store, tab);
+    const tabs = (await chrome.tabs.query({})).filter(tab => isSortable(tab) && isReady(tab) && !isSorted(tab));
     if (tabs.length === 0) return;
 
     const { placements: results, categoryNames } = await classifyInBackground(tabs);
@@ -486,7 +509,7 @@ async function runAutoSort() {
 
     await saveUndoState(tabs.map(tab => tab.windowId));
     for (let i = 0; i < tabs.length; i++) {
-      placements[tabs[i].id] = { url: withoutHash(tabs[i].url), ...results[i] };
+      placements[tabs[i].id] = { url: withoutHash(tabs[i].url), basis: sortBasis(store, tabs[i]), ...results[i] };
       await placeTabInGroup(tabs[i], results[i], managed, placements);
     }
     await savePlacements(placements);
@@ -568,6 +591,7 @@ async function applySort(entries) {
   const result = await applyTabOrder(live.map(entry => entry.tabId));
 
   const placements = await loadPlacements();
+  const store = await loadTabStore();
   const tabsAfter = await chrome.tabs.query({ currentWindow: true });
   const stillOpen = new Set(tabsAfter.map(tab => tab.id));
   const byCategory = new Map();
@@ -575,7 +599,7 @@ async function applySort(entries) {
     if (!stillOpen.has(tabId)) continue;
     if (!byCategory.has(placement.category)) byCategory.set(placement.category, { placement, tabIds: [] });
     byCategory.get(placement.category).tabIds.push(tabId);
-    placements[tabId] = { url: withoutHash(byId.get(tabId).url), ...placement };
+    placements[tabId] = { url: withoutHash(byId.get(tabId).url), basis: sortBasis(store, byId.get(tabId)), ...placement };
   }
   for (const { placement, tabIds } of byCategory.values()) {
     const groupId = await editTabs(() => chrome.tabs.group({ tabIds, createProperties: { windowId: tabsAfter[0].windowId } }));

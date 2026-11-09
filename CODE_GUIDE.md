@@ -152,8 +152,14 @@ the connector opacity and the `%` label. `reannotateChain` redoes that after a d
 model:
 
 - **Mixed sites.** YouTube's homepage is Entertainment. A video on a channel in
-  `STUDY_CHANNELS` is Study. Any other video goes to the model, falling back to
-  Entertainment if it isn't confident. A search goes to the model using only the query.
+  `STUDY_CHANNELS` is Study. Otherwise YouTube's own category decides
+  (`YOUTUBE_CATEGORIES`: Education → Study, Music → Entertainment › Music, ...). Broad
+  categories (People & Blogs, Science & Technology), and channel pages, go to the
+  model, falling back to Entertainment if it isn't confident; a programming video it
+  calls Developer Tools counts as Study. The content script reads the category from
+  the page for the first video, and fetches the video's own youtube.com page after
+  in-site navigation. A tab is re-sorted when its text, channel or category arrives
+  after it was sorted (`sortBasis` in background.js). A search goes to the model using only the query.
 - **`KNOWN_SITES`.** Host → category and subcategory, also trying parent domains. Block
   pages (`REFUSED_PAGE`) on unknown sites go to Unsure rather than being guessed from.
 - **The model.** `closestDescription` compares the tab with every subcategory's written

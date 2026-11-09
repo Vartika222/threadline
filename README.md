@@ -15,7 +15,8 @@ Chrome Web Store.
 ## How it works
 
 1. **Read.** A content script reads each page's title, meta description, top
-   headings and first paragraph, plus the channel on YouTube videos.
+   headings and first paragraph, plus the channel and YouTube's own category
+   (Education, Music, Gaming, ...) on YouTube videos.
 2. **Categorise.** Each tab gets one of 8 categories and a subcategory:
 
    | Category | Subcategories |
@@ -30,8 +31,9 @@ Chrome Web Store.
    | Life & Other | Health, Home, Travel, Society, Unsure |
 
    Three steps decide it:
-   - **Content on mixed sites.** A YouTube video is judged by its channel and title,
-     so a lecture lands in Study and the homepage in Entertainment. A Google search
+   - **Content on mixed sites.** A YouTube video is judged by its channel, then the
+     category YouTube lists for it, then its title, so a lecture lands in Study and
+     the homepage in Entertainment. Switching video inside YouTube re-sorts the tab. A Google search
      is judged by what was searched for.
    - **A known sites list** for common sites. This needs no model.
    - **The language model** for everything else. A pretrained neural network,
@@ -206,8 +208,11 @@ See [CODE_GUIDE.md](CODE_GUIDE.md) for a guided tour of the code and
   list, and there's no way yet to correct one and have it remembered.
 - Short searches give the model little to go on: "what is photosynthesis" lands in
   Social.
-- YouTube channel names come from the page's layout, so a redesign could stop that
-  working. Video titles would still be used.
+- YouTube's category for a video is whatever the uploader picked, and is read from
+  YouTube's page data, so a redesign could stop that working. Video titles would
+  still be used.
+- The model only understands English: a lecture titled in another language can land
+  in the wrong category.
 - Tab groups can't be nested in Chrome, so subcategories only show as the order inside
   a group, in the popup, and in the badge's tooltip.
 - **Sort now** takes a few seconds, because WebAssembly runs on one thread in an

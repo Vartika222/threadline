@@ -16,7 +16,9 @@ const RULES = {
 };
 const NAMES = ['Study', 'Work', 'Entertainment', 'Games', 'Social', 'Shopping & Art', 'News', 'Life & Other'];
 const classifier = (message) => ({
-  placements: message.tabs.map(tab => RULES[new URL(tab.url).hostname.split('.')[0]] || RULES.unsure),
+  placements: message.tabs.map(tab => (tab.youtubeCategory === 'Education' || tab.content === 'about studying'
+    ? RULES.study
+    : RULES[new URL(tab.url).hostname.split('.')[0]] || RULES.unsure)),
   categoryNames: NAMES,
 });
 const tab = (id, site, extra = {}) => ({ id, title: site, url: `https://${site}.test/`, ...extra });
@@ -99,6 +101,38 @@ test('a page still loading waits until its text has arrived', async () => {
     { type: 'TAB_DATA_UPDATE', payload: { url: openTabs[0].url, content: 'page text' } }, { tab: { id: 1 } }, resolve));
   await api.runAutoSort();
   assert(groups.length === 1, 'sorted once the text arrived');
+});
+
+const pageData = (listeners, payload) => new Promise(resolve =>
+  listeners.onMessage[0]({ type: 'TAB_DATA_UPDATE', payload }, { tab: { id: 1 } }, resolve));
+
+test('a YouTube video waits for its channel and category, then goes by them', async () => {
+  const video = { id: 1, title: 'A course - YouTube', url: 'https://www.youtube.com/watch?v=a', status: 'complete' };
+  const { api, listeners, openTabs, groups } = await boot([video]);
+  await api.runAutoSort();
+  assert(groups.length === 0, 'not sorted before YouTube says what the video is');
+  await listeners.onCreated[0](openTabs[0]);
+  await pageData(listeners, { url: video.url, content: 'A course', channel: 'Someone', youtubeCategory: 'Education' });
+  await api.runAutoSort();
+  assert(openTabs[0].groupId === groups.find(g => g.title === 'Study')?.id, groupTitles({ groups }));
+});
+
+test('a tab is sorted again when its details arrive after it was sorted', async () => {
+  const { api, listeners, openTabs, groups } = await boot([tab(1, 'other')]);
+  await api.runAutoSort();
+  assert(groupTitles({ groups }) === 'Life & Other', groupTitles({ groups }));
+  await listeners.onCreated[0](openTabs[0]);
+  await pageData(listeners, { url: openTabs[0].url, content: 'about studying' });
+  await api.runAutoSort();
+  assert(openTabs[0].groupId === groups.find(g => g.title === 'Study')?.id, 'moved once its text arrived');
+});
+
+test('details saved for a previous page are not used for the new one', async () => {
+  const { api, listeners, openTabs, groups } = await boot([tab(1, 'other')]);
+  await listeners.onCreated[0](openTabs[0]);
+  await pageData(listeners, { url: 'https://earlier.test/', content: 'about studying' });
+  await api.runAutoSort();
+  assert(groupTitles({ groups }) === 'Life & Other', groupTitles({ groups }));
 });
 
 test('retries while the user is dragging a tab', async () => {
