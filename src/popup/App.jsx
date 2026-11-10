@@ -49,6 +49,7 @@ export default function App() {
   const [view, setView] = useState('idle');
   const [page, setPage] = useState('tabs'); // inside the idle view
   const [savedNote, setSavedNote] = useState(false);
+  const [stashNote, setStashNote] = useState(null);
   const [tabs, setTabs] = useState([]);
   const [sortedChain, setSortedChain] = useState([]);
   const [clusters, setClusters] = useState({});
@@ -196,6 +197,13 @@ export default function App() {
     maybeRetrain();
   }
 
+  async function handleStash() {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const result = tab && await chrome.runtime.sendMessage({ type: 'STASH_PAGE', tabId: tab.id });
+    setStashNote(result?.ok ? 'Stashed ✓' : "Can't stash");
+    setTimeout(() => setStashNote(null), 1500);
+  }
+
   async function handleSnapshot() {
     await chrome.runtime.sendMessage({ type: 'SAVE_SNAPSHOT', name: null });
     setSavedNote(true);
@@ -226,9 +234,17 @@ export default function App() {
           <Squirrel className="logo-mark" />
           <span className="logo-text">Threadline</span>
         </div>
-        <button className="snapshot-btn" onClick={handleSnapshot} title="Save this window's tabs, order and groups">
-          {savedNote ? 'Saved ✓' : '↓ Save'}
-        </button>
+        <div className="header-actions">
+          <button className="snapshot-btn" onClick={handleStash} title="Stash this page to your memory (Alt+Shift+S)">
+            {stashNote || 'Stash'}
+          </button>
+          <button className="snapshot-btn" onClick={() => chrome.runtime.sendMessage({ type: 'OPEN_MEMORY' })} title="Search everything you've seen, your stash, trails and projects">
+            Memory
+          </button>
+          <button className="snapshot-btn" onClick={handleSnapshot} title="Save this window's tabs, order and groups">
+            {savedNote ? 'Saved ✓' : 'Save'}
+          </button>
+        </div>
       </header>
 
       {/* Main content */}

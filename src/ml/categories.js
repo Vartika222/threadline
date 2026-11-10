@@ -144,6 +144,7 @@ export const KNOWN_SITES = {
   'zoom.us': ['Work', 'Productivity'], 'zoom.com': ['Work', 'Productivity'], 'mail.google.com': ['Work', 'Productivity'], 'docs.google.com': ['Work', 'Productivity'],
   'drive.google.com': ['Work', 'Productivity'], 'calendar.google.com': ['Work', 'Productivity'],
   'meet.google.com': ['Work', 'Productivity'], 'outlook.com': ['Work', 'Productivity'], 'office.com': ['Work', 'Productivity'],
+  'live.com': ['Work', 'Productivity'], 'office365.com': ['Work', 'Productivity'], // outlook.live.com is personal Outlook
   'salesforce.com': ['Work', 'Business & Finance'], 'hubspot.com': ['Work', 'Business & Finance'],
   // Jobs & Hiring
   'naukri.com': ['Jobs & Hiring', 'Job Boards'], 'indeed.com': ['Jobs & Hiring', 'Job Boards'],
@@ -382,7 +383,6 @@ export function closestDescription(vector, descriptions) {
  * The key a correction is remembered under: the site, or for YouTube, the
  * channel, since one site holds every kind of video. Null where a correction
  * can't carry over to other pages: searches, and YouTube pages with no channel.
- * background.js has a copy of this; a test checks they agree.
  */
 export function correctionKey(tab) {
   const host = hostOf(tab.url);

@@ -79,7 +79,9 @@ export function exampleKey(url) {
 export function mergeExamples(stored, incoming, max = MAX_EXAMPLES) {
   const byKey = new Map(stored.map(e => [e.key, e]));
   for (const example of incoming) {
-    if (!STUDENT_LABELS.includes(example.label) || !(example.source in SOURCE_WEIGHTS)) continue;
+    // These arrive by message from the classifier page; 'description' examples are never stored.
+    if (!example?.key || !Array.isArray(example.vector) || !STUDENT_LABELS.includes(example.label)
+      || !(example.source in SOURCE_WEIGHTS) || example.source === 'description') continue;
     // A correction isn't overwritten by a guess about the same page.
     const old = byKey.get(example.key);
     if (old && old.source === 'correction' && example.source !== 'correction') continue;
@@ -187,6 +189,11 @@ export function predictStudent(model, vector) {
   for (let k = 1; k < logits.length; k++) if (logits[k] > logits[best]) best = k;
   const [category, subcategory] = model.labels[best].split(' › ');
   return { category, subcategory, confidence: logits[best] };
+}
+
+/** What classifyTabs takes as `student`: the stored model, but only once it has passed its test. */
+export function trustedStudent(model) {
+  return model?.trusted ? { confidence: CONFIDENCE, predict: (vector) => predictStudent(model, vector) } : null;
 }
 
 /**

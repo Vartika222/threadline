@@ -680,3 +680,7 @@ input[type="checkbox"] { accent-color: var(--text-primary); }
 .small-btn { border-radius: var(--radius); font-size: 10px; text-transform: uppercase; letter-spacing: 0.071em; }
 .small-btn.danger:hover { border-color: var(--red); color: var(--text-primary); }
 .auto-sort-toggle { margin: 4px 0; }
+
+/* Header buttons: Stash, Memory, Save */
+.header-actions { display: flex; gap: 6px; }
+.header-actions .snapshot-btn { padding: 6px 9px; }

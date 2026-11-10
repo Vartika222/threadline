@@ -27,6 +27,10 @@
  *   START_FOCUS, END_FOCUS, GET_FOCUS, SET_STRICT_FOCUS, FOCUS_ALLOW, FOCUS_GO_BACK
  *                     → focus mode (see below)
  */
+import { CATEGORY_NAMES, correctionKey } from './src/ml/categories.js';
+import { mergeExamples, countSources, RETRAIN_EVERY } from './src/ml/student.js';
+import { put, update, forgetBefore } from './src/memory/db.js';
+import { dayOf, DAY_MS } from './src/memory/memory.js';
 
 // ─── State Management ─────────────────────────────────────────────────────
 
@@ -249,12 +253,14 @@ async function injectContentScriptIntoOpenTabs() {
 }
 
 chrome.runtime.onInstalled?.addListener(async () => {
+  setUpMemory();
   await syncStoreWithOpenTabs();
   await injectContentScriptIntoOpenTabs();
   scheduleAutoSort();
 });
 
 chrome.runtime.onStartup?.addListener(async () => {
+  forgetOldMemory();
   await syncStoreWithOpenTabs();
   scheduleAutoSort();
 });
@@ -320,6 +326,7 @@ chrome.tabs.onActivated.addListener(async ({ tabId }) => {
     }
   });
 
+  if (knownTab) recordVisit(knownTab);
   await showTabCategoryOnBadge(tabId);
   await enforceFocus(tabId);
 });
@@ -349,6 +356,7 @@ function forgetPageTextOnNavigation(tabId, newUrl) {
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   if (changeInfo.groupId !== undefined) await learnFromMove(tabId, changeInfo.groupId);
   if (changeInfo.url) await forgetPageTextOnNavigation(tabId, changeInfo.url);
+  if (changeInfo.url && tab.active) recordVisit({ ...tab, url: changeInfo.url });
   if (changeInfo.status !== 'complete') return;
 
   await updateTabStore((store) => {
@@ -416,6 +424,25 @@ function forgetPlacement(tabId) {
   return withStoreLock(async () => {
     const placements = await loadPlacements();
     delete placements[tabId];
+    await savePlacements(placements);
+  });
+}
+
+/**
+ * Saves placements worked out from an earlier read of them. Classifying can take
+ * seconds, so it re-reads under the lock: a tab closed meanwhile isn't brought
+ * back, and a tab whose entry changed meanwhile (a correction asked for it to be
+ * sorted again) keeps that request.
+ */
+function savePlacementUpdates(updates, readBefore) {
+  return withStoreLock(async () => {
+    const placements = await loadPlacements();
+    const open = new Set((await chrome.tabs.query({})).map(tab => tab.id));
+    for (const [id, placement] of Object.entries(updates)) {
+      if (!open.has(Number(id))) continue;
+      const changed = JSON.stringify(placements[id]) !== JSON.stringify(readBefore[id]);
+      placements[id] = changed ? { ...placement, basis: null } : placement;
+    }
     await savePlacements(placements);
   });
 }
@@ -533,14 +560,17 @@ async function runAutoSort() {
     const { placements: results, categoryNames } = await classifyInBackground(tabs);
     const managed = new Set(categoryNames);
 
-    await saveUndoState(tabs.map(tab => tab.windowId));
+    // No Undo state here: this only moves newly loaded tabs, and saving it would
+    // replace the Undo of a Sort now or a snapshot restore.
+    const updates = {};
     for (let i = 0; i < tabs.length; i++) {
       // A tab put in place by a snapshot keeps its spot until it navigates away.
       const manual = placements[tabs[i].id]?.manual && placements[tabs[i].id].url === withoutHash(tabs[i].url);
-      placements[tabs[i].id] = { url: withoutHash(tabs[i].url), basis: sortBasis(store, tabs[i]), ...results[i], ...(manual && { manual }) };
-      if (!manual) await placeTabInGroup(tabs[i], results[i], managed, placements);
+      rememberCategory(tabs[i].url, results[i]);
+      updates[tabs[i].id] = { url: withoutHash(tabs[i].url), basis: sortBasis(store, tabs[i]), ...results[i], ...(manual && { manual }) };
+      if (!manual) await placeTabInGroup(tabs[i], results[i], managed, { ...placements, ...updates });
     }
-    await savePlacements(placements);
+    await savePlacementUpdates(updates, placements);
 
     const [active] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
     if (active) {
@@ -608,6 +638,7 @@ async function applySort(entries) {
     return tab && !tab.pinned && !isUserGrouped(tab);
   });
   await saveUndoState([windowTabs[0]?.windowId]);
+  const placementsBefore = await loadPlacements();
 
   // Empty the old groups first: moving a tab across a group would pull it in.
   const managedTabs = live.map(entry => entry.tabId).filter(id => {
@@ -618,7 +649,7 @@ async function applySort(entries) {
 
   const result = await applyTabOrder(live.map(entry => entry.tabId));
 
-  const placements = await loadPlacements();
+  const updates = {};
   const store = await loadTabStore();
   const tabsAfter = await chrome.tabs.query({ currentWindow: true });
   const stillOpen = new Set(tabsAfter.map(tab => tab.id));
@@ -627,13 +658,13 @@ async function applySort(entries) {
     if (!stillOpen.has(tabId)) continue;
     if (!byCategory.has(placement.category)) byCategory.set(placement.category, { placement, tabIds: [] });
     byCategory.get(placement.category).tabIds.push(tabId);
-    placements[tabId] = { url: withoutHash(byId.get(tabId).url), basis: sortBasis(store, byId.get(tabId)), ...placement };
+    updates[tabId] = { url: withoutHash(byId.get(tabId).url), basis: sortBasis(store, byId.get(tabId)), ...placement };
   }
   for (const { placement, tabIds } of byCategory.values()) {
     const groupId = await editTabs(() => chrome.tabs.group({ tabIds, createProperties: { windowId: tabsAfter[0].windowId } }));
     await editTabs(() => chrome.tabGroups.update(groupId, { title: placement.category, color: placement.color }));
   }
-  await savePlacements(placements);
+  await savePlacementUpdates(updates, placementsBefore);
 
   const active = tabsAfter.find(tab => tab.active);
   if (active) await showTabCategoryOnBadge(active.id);
@@ -645,7 +676,7 @@ async function applySort(entries) {
 function isManagedTitle(title, managed) {
   return managed.has(title) || KNOWN_GROUP_TITLES.has(title);
 }
-const KNOWN_GROUP_TITLES = new Set(['Study', 'Work', 'Jobs & Hiring', 'Entertainment', 'Games', 'Social', 'Shopping & Art', 'News', 'Life & Other']);
+const KNOWN_GROUP_TITLES = new Set(CATEGORY_NAMES);
 
 /** Records how the tabs are arranged, so Undo can put them back. */
 async function saveUndoState(windowIds) {
@@ -669,7 +700,7 @@ async function undoLastSort() {
 
   // Put categories back too. Tabs sorted for the first time keep their entry, so
   // automatic sorting doesn't immediately redo what was just undone.
-  await savePlacements({ ...(await loadPlacements()), ...state.placements });
+  await withStoreLock(async () => savePlacements({ ...(await loadPlacements()), ...state.placements }));
 
   for (const { windowId, tabs, groups } of state.windows) {
     const open = new Map((await chrome.tabs.query({ windowId })).map(tab => [tab.id, tab]));
@@ -843,18 +874,6 @@ chrome.alarms.onAlarm.addListener(async ({ name }) => {
 const CORRECTIONS_KEY = 'site_corrections';   // correctionKey → { category, subcategory?, at }
 const NANO_KEY = 'use_gemini_nano';
 const NANO_STATUS_KEY = 'gemini_nano_status';
-const SEARCH_SITES = /^(google\.[a-z.]+|bing\.com|duckduckgo\.com|search\.yahoo\.com)$/;
-
-/** Same as correctionKey in src/ml/categories.js, which this file can't import. */
-function correctionKey(tab) {
-  const host = safeHostname(tab.url).replace(/^www\./, '');
-  if (!host || !/^https?:/.test(tab.url || '') || SEARCH_SITES.test(host)) return null;
-  if (host === 'youtube.com' || host === 'm.youtube.com') {
-    const channel = (tab.channel || '').trim().toLowerCase();
-    return channel ? `youtube:${channel}` : null;
-  }
-  return host;
-}
 
 async function loadCorrections() {
   const { [CORRECTIONS_KEY]: corrections } = await chrome.storage.local.get(CORRECTIONS_KEY);
@@ -901,12 +920,19 @@ async function correctTab(tabId, category, subcategory = null) {
   return { ok: true, key };
 }
 
+/** Forgets a correction, and the student examples it made, so the student unlearns it too. */
 async function forgetCorrection(key) {
+  let untrained = false;
   await withStoreLock(async () => {
     const corrections = await loadCorrections();
     delete corrections[key];
-    await chrome.storage.local.set({ [CORRECTIONS_KEY]: corrections });
+    const { [STUDENT_EXAMPLES_KEY]: examples = [] } = await chrome.storage.local.get(STUDENT_EXAMPLES_KEY);
+    // Older examples have no site; their page's site is the same for anything but YouTube channels.
+    const kept = examples.filter(e => !(e.source === 'correction' && (e.site ?? correctionKey({ url: e.key })) === key));
+    untrained = kept.length < examples.length;
+    await chrome.storage.local.set({ [CORRECTIONS_KEY]: corrections, [STUDENT_EXAMPLES_KEY]: kept });
   });
+  if (untrained) trainStudent().catch(err => console.warn('[Threadline] Training the student failed:', err.message));
   return { ok: true };
 }
 
@@ -937,9 +963,6 @@ const STUDENT_EXAMPLES_KEY = 'student_examples';   // [{ key, vector, label, sou
 const STUDENT_MODEL_KEY = 'student_model';         // what buildStudent returns
 const STUDENT_NEW_KEY = 'student_new_examples';    // examples since the last training
 const STUDENT_SPEED_KEY = 'student_speed';         // running totals for the Model page
-const STUDENT_MAX_EXAMPLES = 400;                  // same as MAX_EXAMPLES in student.js
-const STUDENT_RETRAIN_EVERY = 3;                   // same as RETRAIN_EVERY in student.js
-const STUDENT_SOURCES = new Set(['nano', 'rules', 'correction']);
 let studentTraining = null;
 
 async function loadStudent() {
@@ -947,31 +970,14 @@ async function loadStudent() {
   return model || null;
 }
 
-/**
- * Same as mergeExamples in src/ml/student.js, which this file can't import: a
- * page seen again replaces its old example (but a guess never replaces your
- * correction), and only the newest examples are kept. A test checks they agree.
- */
-function mergeStudentExamples(stored, incoming, max = STUDENT_MAX_EXAMPLES) {
-  const byKey = new Map(stored.map(e => [e.key, e]));
-  for (const example of incoming) {
-    if (!example?.key || !STUDENT_SOURCES.has(example.source) || !Array.isArray(example.vector)) continue;
-    const old = byKey.get(example.key);
-    if (old && old.source === 'correction' && example.source !== 'correction') continue;
-    byKey.delete(example.key);
-    byKey.set(example.key, example);
-  }
-  return [...byKey.values()].sort((a, b) => (a.at || 0) - (b.at || 0)).slice(-max);
-}
-
 async function addStudentExamples(incoming) {
   let shouldTrain = false;
   await withStoreLock(async () => {
     const got = await chrome.storage.local.get([STUDENT_EXAMPLES_KEY, STUDENT_NEW_KEY]);
-    const examples = mergeStudentExamples(got[STUDENT_EXAMPLES_KEY] || [], incoming || []);
+    const examples = mergeExamples(got[STUDENT_EXAMPLES_KEY] || [], incoming || []);
     const fresh = (got[STUDENT_NEW_KEY] || 0) + (incoming || []).length;
     await chrome.storage.local.set({ [STUDENT_EXAMPLES_KEY]: examples, [STUDENT_NEW_KEY]: fresh });
-    shouldTrain = fresh >= STUDENT_RETRAIN_EVERY;
+    shouldTrain = fresh >= RETRAIN_EVERY;
   });
   if (shouldTrain) trainStudent().catch(err => console.warn('[Threadline] Training the student failed:', err.message));
   return { ok: true };
@@ -1014,11 +1020,9 @@ async function studentSummary() {
   const got = await chrome.storage.local.get([STUDENT_MODEL_KEY, STUDENT_EXAMPLES_KEY, STUDENT_NEW_KEY, STUDENT_SPEED_KEY]);
   const model = got[STUDENT_MODEL_KEY];
   const examples = got[STUDENT_EXAMPLES_KEY] || [];
-  const counts = { nano: 0, correction: 0, rules: 0 };
-  for (const e of examples) counts[e.source] = (counts[e.source] || 0) + 1;
   return {
     examples: examples.length,
-    counts,
+    counts: countSources(examples),
     newSinceTraining: got[STUDENT_NEW_KEY] || 0,
     model: model ? {
       evaluation: model.evaluation,
@@ -1151,6 +1155,191 @@ async function restoreSnapshot(id) {
   return { ok: true, restored: restored.length, reopened, skipped };
 }
 
+// ─── Memory ───────────────────────────────────────────────────────────────
+//
+// Threadline remembers the pages you visit (their text, category and meaning)
+// and what you stash, in IndexedDB on this computer (src/memory/db.js). The
+// memory page searches it and finds trails and projects in it. Nothing is
+// recorded for incognito tabs, while memory is paused, or on sites you excluded,
+// and pages not seen for 90 days are forgotten. Stash items stay until deleted.
+
+const MEMORY_PAUSED_KEY = 'memory_paused';
+const MEMORY_EXCLUDED_KEY = 'memory_excluded';   // [host]
+const RESURFACED_KEY = 'memory_resurfaced';      // url → the day its note was shown
+const MEMORY_DAYS = 90;
+const INDEX_DELAY_MS = 3000;
+let lastVisitUrl = null;
+let indexTimer = null;
+
+const fail = (what) => (err) => console.warn(`[Threadline] ${what}:`, err.message);
+
+async function memoryAllows(tab) {
+  if (!tab || tab.incognito || !/^https?:/.test(tab.url || '')) return false;
+  const got = await chrome.storage.local.get([MEMORY_PAUSED_KEY, MEMORY_EXCLUDED_KEY]);
+  return got[MEMORY_PAUSED_KEY] !== true && !(got[MEMORY_EXCLUDED_KEY] || []).includes(safeHostname(tab.url));
+}
+
+/** A page's record, created on its first visit, with today added to the days it was seen. */
+function touchPage(record, tab, now) {
+  const url = withoutHash(tab.url);
+  const page = record || { url, firstSeen: now, days: [], needsVector: true };
+  const today = dayOf(now);
+  return {
+    ...page,
+    title: tab.title || page.title || '',
+    host: safeHostname(url),
+    favIconUrl: tab.favIconUrl || page.favIconUrl || '',
+    lastSeen: now,
+    days: page.days.includes(today) ? page.days : [...page.days, today].slice(-60),
+  };
+}
+
+/** Records that you're looking at a tab now. */
+function recordVisit(tab) {
+  (async () => {
+    if (!(await memoryAllows(tab))) return;
+    const url = withoutHash(tab.url);
+    if (url === lastVisitUrl) return; // the same page reported twice (navigation, then activation)
+    lastVisitUrl = url;
+    const now = Date.now();
+    await put('visits', { url, title: tab.title || '', at: now });
+    await update('pages', url, (page) => touchPage(page, tab, now));
+    scheduleIndex();
+  })().catch(fail('Could not record a visit'));
+}
+
+function recordAway() {
+  lastVisitUrl = null;
+  put('visits', { away: true, at: Date.now() }).catch(fail('Could not record time away'));
+}
+
+chrome.windows?.onFocusChanged?.addListener(async (windowId) => {
+  if (windowId === chrome.windows.WINDOW_ID_NONE) return recordAway();
+  const [active] = await chrome.tabs.query({ active: true, windowId });
+  if (active) recordVisit(active);
+});
+
+/** Stores the page text the content script sent, to be embedded. */
+function rememberPageText(tab, payload) {
+  (async () => {
+    if (!(await memoryAllows(tab))) return;
+    const text = (payload.description || payload.content || '').slice(0, 1000);
+    await update('pages', withoutHash(tab.url), (page) => {
+      const next = touchPage(page, { ...tab, title: payload.title || tab.title }, page?.lastSeen || Date.now());
+      return next.text === text && page ? null : { ...next, text, needsVector: true };
+    });
+    scheduleIndex();
+  })().catch(fail('Could not remember a page'));
+}
+
+/** Gives a remembered page the category its tab was sorted into. */
+function rememberCategory(url, { category, subcategory }) {
+  update('pages', withoutHash(url), (page) => (page && page.category !== category
+    ? { ...page, category, subcategory } : null)).catch(fail('Could not save a category'));
+}
+
+/** Saves a page, a highlighted quote or an image to the stash. Works while memory is paused: you asked. */
+async function stashFromTab(tab, { quote = '', imageUrl = '' }) {
+  if (!tab || tab.incognito || !/^https?:/.test(tab.url || '')) return { error: "This page can't be stashed" };
+  const store = await loadTabStore();
+  const saved = savedDetails(store, tab);
+  const placement = (await loadPlacements())[tab.id];
+  const now = Date.now();
+  const item = {
+    id: `${now}-${Math.random().toString(36).slice(2, 8)}`,
+    kind: imageUrl ? 'image' : quote ? 'quote' : 'page',
+    url: withoutHash(tab.url),
+    title: tab.title || '',
+    host: safeHostname(tab.url),
+    favIconUrl: tab.favIconUrl || '',
+    text: (saved.description || saved.content || '').slice(0, 1000),
+    quote: quote.trim().slice(0, 2000),
+    imageUrl,
+    category: placement?.category || null,
+    subcategory: placement?.subcategory || null,
+    savedAt: now,
+    needsVector: true,
+  };
+  await put('stash', item);
+  scheduleIndex(0);
+  const what = { image: 'Image stashed', quote: 'Quote stashed', page: 'Page stashed' }[item.kind];
+  chrome.tabs.sendMessage(tab.id, { type: 'TOAST', text: what }).catch(() => {});
+  return { ok: true, item: { id: item.id, kind: item.kind } };
+}
+
+/** The keyboard shortcut stashes what you highlighted, or else the page. */
+async function stashActiveTab() {
+  const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  if (!tab) return;
+  let quote = '';
+  try {
+    const [{ result }] = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: () => String(getSelection() || '') });
+    quote = result || '';
+  } catch {
+    // a page scripts can't run on: stash the page
+  }
+  await stashFromTab(tab, { quote });
+}
+
+chrome.commands?.onCommand?.addListener((command) => {
+  if (command === 'stash') stashActiveTab().catch(fail('Could not stash'));
+});
+
+chrome.contextMenus?.onClicked?.addListener((info, tab) => {
+  const options = { 'stash-quote': { quote: info.selectionText || '' }, 'stash-image': { imageUrl: info.srcUrl || '' } }[info.menuItemId] || {};
+  if (String(info.menuItemId).startsWith('stash-')) stashFromTab(tab, options).catch(fail('Could not stash'));
+});
+
+function setUpMemory() {
+  chrome.contextMenus?.removeAll(() => {
+    chrome.contextMenus.create({ id: 'stash-page', title: 'Stash this page', contexts: ['page'] });
+    chrome.contextMenus.create({ id: 'stash-quote', title: 'Stash this quote', contexts: ['selection'] });
+    chrome.contextMenus.create({ id: 'stash-image', title: 'Stash this image', contexts: ['image'] });
+  });
+  forgetOldMemory();
+}
+
+function forgetOldMemory() {
+  forgetBefore(Date.now() - MEMORY_DAYS * DAY_MS).catch(fail('Could not forget old pages'));
+}
+
+/** Asks the classifier page to embed new pages and stash items, a few seconds after the last change. */
+function scheduleIndex(delay = INDEX_DELAY_MS) {
+  clearTimeout(indexTimer);
+  indexTimer = setTimeout(() => indexMemory().catch(fail('Could not index memory')), delay);
+  indexTimer.unref?.();
+}
+
+async function indexMemory() {
+  if (!globalThis.indexedDB) return;
+  await ensureClassifierPage();
+  const response = await chrome.runtime.sendMessage({ type: 'INDEX_MEMORY', corrections: await loadCorrections() });
+  if (response?.error) throw new Error(response.error);
+  if (response?.more) scheduleIndex(0);
+  for (const note of response?.resurface || []) await showResurfacing(note);
+}
+
+/** "You stashed 3 things about this": once a day per page, on the tabs showing it. */
+async function showResurfacing({ url, count, since }) {
+  const today = dayOf(Date.now());
+  const { [RESURFACED_KEY]: shown = {} } = await chrome.storage.local.get(RESURFACED_KEY);
+  if (shown[url] === today) return;
+  const tabs = (await chrome.tabs.query({})).filter(tab => withoutHash(tab.url) === url);
+  if (!tabs.length) return;
+  shown[url] = today;
+  for (const key of Object.keys(shown)) if (shown[key] !== today) delete shown[key];
+  await chrome.storage.local.set({ [RESURFACED_KEY]: shown });
+  const month = new Date(since).toLocaleString(undefined, { month: 'long' });
+  const text = `You stashed ${count === 1 ? 'something' : `${count} things`} about this in ${month}`;
+  for (const tab of tabs) chrome.tabs.sendMessage(tab.id, { type: 'TOAST', text, related: url }).catch(() => {});
+}
+
+async function openMemoryPage(related) {
+  const hash = related ? `#related=${encodeURIComponent(related)}` : '';
+  await chrome.tabs.create({ url: chrome.runtime.getURL(`memory.html${hash}`) });
+  return { ok: true };
+}
+
 // Reachable from the service worker console as well as the popup.
 globalThis.threadline = {
   startFocus,
@@ -1162,8 +1351,8 @@ globalThis.threadline = {
   saveSnapshot,
   restoreSnapshot,
   correctTab,
-  correctionKey,
-  mergeStudentExamples,
+  stashFromTab,
+  indexMemory,
 };
 
 // ─── Message Handlers (from popup and content scripts) ────────────────────
@@ -1222,6 +1411,7 @@ async function handleMessage(message, sender) {
           }
         });
         scheduleAutoSort();
+        rememberPageText(sender.tab, message.payload);
       }
       return { ok: true };
     }
@@ -1320,6 +1510,12 @@ async function handleMessage(message, sender) {
       const { [NANO_STATUS_KEY]: status } = await chrome.storage.session.get(NANO_STATUS_KEY);
       return { enabled: await isNanoOn(), backgroundStatus: status || null };
     }
+
+    case 'STASH_PAGE':
+      return stashFromTab(await chrome.tabs.get(message.tabId), {});
+
+    case 'OPEN_MEMORY':
+      return openMemoryPage(message.related);
 
     case 'STUDENT_EXAMPLES':
       return addStudentExamples(message.examples);
