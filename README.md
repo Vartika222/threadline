@@ -245,7 +245,9 @@ src/offscreen/       Hidden page that classifies tabs for the service worker
 blocked.html/.js     The page strict focus shows
 public/model/        The language model, bundled (see THIRD_PARTY_NOTICES.md)
 training/            Scripts to fine-tune the language model and train a category network
-src/popup/           React popup UI
+src/popup/           React popup UI (squirrel.js holds the pixel squirrel)
+site/index.html      Landing page: one self-contained file, open it in a browser
+brand/               node brand/squirrel.mjs writes brand/squirrel.svg
 tests/               Plain-Node tests (+ chrome.* mock in tests/helpers)
 eval/                labelled tabs + chain-quality benchmark
 ```

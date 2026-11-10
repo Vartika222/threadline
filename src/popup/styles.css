@@ -1,25 +1,31 @@
 /* THREADLINE — styles.css
-   MetaMask-inspired dense dark UI.
-   Design language: precision tool, not consumer app.
+   Black gallery: a void canvas, bone-white type, hairline borders, and one
+   red accent used like punctuation (the squirrel's acorn, the featured item).
+   Same tokens as site/index.html. The popup uses the system's own fonts, so
+   it makes no request to a font service.
 */
 
 :root {
-  --bg-primary:    #0f0f1a;
-  --bg-secondary:  #1a1a2e;
-  --bg-card:       #16213e;
-  --accent:        #7C3AED;
-  --accent-light:  #8B5CF6;
-  --accent-glow:   rgba(124, 58, 237, 0.2);
-  --cyan:          #06B6D4;
-  --text-primary:  #F1F5F9;
-  --text-secondary:#94A3B8;
-  --text-muted:    #475569;
-  --border:        rgba(255,255,255,0.06);
-  --border-accent: rgba(124, 58, 237, 0.4);
-  --success:       #10B981;
-  --error:         #EF4444;
+  --bg-primary:    #080808;  /* void */
+  --bg-secondary:  #171617;  /* charcoal */
+  --bg-card:       #262525;  /* smoke */
+  --graphite:      #393939;
+  --accent:        #fcfcfc;  /* bone: emphasis comes from white, not colour */
+  --accent-light:  #fcfcfc;
+  --accent-glow:   rgba(252, 252, 252, 0.08);
+  --red:           #fe1e34;  /* arterial red: rare, never a fill behind text */
+  --cyan:          #d4d2d2;
+  --text-primary:  #fcfcfc;
+  --text-secondary:#d4d2d2;  /* ash */
+  --text-muted:    #b5b2b2;  /* pebble */
+  --border:        #393939;
+  --border-accent: #d4d2d2;
+  --success:       #d4d2d2;
+  --error:         #fe1e34;
   --radius:        8px;
-  --radius-sm:     4px;
+  --radius-sm:     3px;
+  --sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --serif: 'New York', 'Iowan Old Style', Georgia, serif;
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -30,7 +36,9 @@ body {
   max-height: 600px;
   background: var(--bg-primary);
   color: var(--text-primary);
-  font-family: 'Inter', 'SF Pro Display', -apple-system, sans-serif;
+  font-family: var(--sans);
+  letter-spacing: -0.01em;
+  -webkit-font-smoothing: antialiased;
   font-size: 13px;
   overflow: hidden;
 }
@@ -619,3 +627,56 @@ body {
 .student-speed { display: flex; flex-direction: column; gap: 2px; font-size: 11px; color: var(--text-secondary); }
 .student-speed span { display: inline-block; width: 82px; color: var(--text-muted); }
 .student-speed strong { color: var(--text-primary); }
+
+/* ── BLACK GALLERY LAYER ──────────────────────────── */
+/* Buttons are outlined, never filled; labels are tracked uppercase. */
+
+::selection { background: var(--text-primary); color: var(--bg-primary); }
+:focus-visible { outline: 1px solid var(--text-primary); outline-offset: 2px; }
+* { scrollbar-color: var(--graphite) transparent; scrollbar-width: thin; }
+input[type="checkbox"] { accent-color: var(--text-primary); }
+
+.header { background: var(--bg-primary); border-bottom: 1px solid var(--border); padding: 14px 16px 12px; }
+.logo { gap: 10px; }
+.logo-mark { width: 22px; height: 22px; image-rendering: pixelated; }
+.logo-text { font-size: 14px; font-weight: 700; letter-spacing: -0.04em; text-transform: uppercase; }
+.snapshot-btn, .sort-btn, .apply-btn, .cancel-btn {
+  background: transparent;
+  border: 1px solid var(--border-accent);
+  border-radius: var(--radius);
+  color: var(--text-primary);
+  font-size: 11px;
+  font-weight: 400;
+  text-transform: uppercase;
+  letter-spacing: 0.071em;
+  box-shadow: none;
+}
+.snapshot-btn { border-color: var(--border); color: var(--text-secondary); padding: 6px 12px; }
+.sort-btn, .apply-btn { padding: 12px; }
+.sort-btn:hover:not(:disabled), .apply-btn:hover, .cancel-btn:hover, .snapshot-btn:hover {
+  background: var(--text-primary); color: var(--bg-primary); border-color: var(--text-primary); box-shadow: none;
+}
+.sort-btn:disabled { background: transparent; border-color: var(--border); color: var(--text-muted); }
+.cancel-btn { border-color: var(--border); color: var(--text-secondary); }
+
+.page-tabs { background: transparent; border: 0; border-bottom: 1px solid var(--border); border-radius: 0; padding: 0; gap: 0; }
+.page-tab {
+  border-radius: 0; padding: 8px 0 10px;
+  font-size: 10px; text-transform: uppercase; letter-spacing: 0.071em; color: var(--text-muted);
+  border-bottom: 1px solid transparent; margin-bottom: -1px;
+}
+.page-tab-on { background: transparent; color: var(--text-primary); font-weight: 700; border-bottom-color: var(--text-primary); }
+
+.panel-title { font-size: 18px; font-weight: 700; letter-spacing: -0.04em; text-transform: uppercase; line-height: 1.05; }
+.panel-hint { color: var(--text-secondary); font-weight: 300; font-size: 12px; margin-top: -2px; }
+.chip { border-radius: var(--radius-sm); border-color: var(--border); }
+.chip-on { border-color: var(--text-primary); }
+.focus-label, .field-label, .tab-count { text-transform: uppercase; letter-spacing: 0.071em; font-size: 10px; color: var(--text-muted); }
+.progress-bar > div { background: var(--red); }
+.error { border-color: var(--red); background: transparent; color: var(--text-primary); }
+.student-card, .compare-row { border-color: var(--border); }
+.compare-row:not(.compare-same) { border-color: var(--text-secondary); }
+.tab-item:hover, .chain-card:hover { background: var(--bg-secondary); }
+.small-btn { border-radius: var(--radius); font-size: 10px; text-transform: uppercase; letter-spacing: 0.071em; }
+.small-btn.danger:hover { border-color: var(--red); color: var(--text-primary); }
+.auto-sort-toggle { margin: 4px 0; }
