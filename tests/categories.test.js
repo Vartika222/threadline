@@ -172,6 +172,12 @@ test('subdomains and www match', () => {
   is(classifyByRules({ url: 'https://en.wikipedia.org/wiki/Kyoto' }), 'Study', 'Reference');
 });
 
+test('every Outlook address goes to Work, not to whatever the inbox looks like', () => {
+  for (const url of ['https://outlook.live.com/mail/0/', 'https://outlook.office.com/mail/', 'https://outlook.office365.com/mail/inbox']) {
+    is(classifyByRules({ url, title: 'Mail - Outlook' }), 'Work', 'Productivity');
+  }
+});
+
 test('a look-alike domain does not match', () => {
   assert(classifyByRules({ url: 'https://notgithub.com/' }).useModel === true, 'should fall through to the model');
 });
