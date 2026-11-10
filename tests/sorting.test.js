@@ -159,12 +159,6 @@ test('the badge shows the active tab\'s category', async () => {
   assert(badges.some(b => b.text === 'ST' && b.tabId === 1), JSON.stringify(badges));
 });
 
-test('the group names in background.js match categories.js', async () => {
-  const { CATEGORY_NAMES } = await import('../src/ml/categories.js');
-  const source = (await import('node:fs')).readFileSync(new URL('../background.js', import.meta.url), 'utf8');
-  for (const name of CATEGORY_NAMES) assert(source.includes(`'${name}'`), `${name} missing from background.js`);
-});
-
 section('sort now and Undo');
 
 const entry = (tabId, key) => ({ tabId, placement: RULES[key] });
@@ -196,9 +190,10 @@ test('Undo brings back a group the user had', async () => {
   assert(openTabs.find(t => t.id === 1).groupId !== -1, 'tab back in a group');
 });
 
-test('Undo does not re-sort tabs it just restored', async () => {
-  const { api, listeners, groups } = await boot([tab(1, 'study')]);
-  await api.runAutoSort();
+test('an automatic sort keeps the Undo of Sort now, and Undo stays undone', async () => {
+  const { api, listeners, groups } = await boot([tab(1, 'study'), tab(2, 'shop')]);
+  await send(listeners, { type: 'APPLY_SORT', entries: [entry(1, 'study')] });
+  await api.runAutoSort(); // tab 2 loads and is sorted on its own
   await send(listeners, { type: 'UNDO_SORT' });
   await api.runAutoSort();
   assert(groups.length === 0, 'should stay undone');
@@ -434,6 +429,36 @@ test("Threadline's own sorting is never taken as a correction", async () => {
   assert(Object.keys(corrections).length === 0, JSON.stringify(corrections));
 });
 
+test('a correction made while a slow sort runs still re-sorts that site', async () => {
+  const { api, listeners, openTabs } = await boot([tab(1, 'study'), tab(2, 'shop')]);
+  await api.runAutoSort();
+  openTabs.push(tab(3, 'study'));
+  const classify = chrome.runtime.sendMessage;
+  chrome.runtime.sendMessage = async (m) => { await new Promise(r => setTimeout(r, 30)); return classify(m); };
+  const sorting = api.runAutoSort(); // like Gemini Nano taking seconds
+  await new Promise(r => setTimeout(r, 5));
+  await send(listeners, { type: 'CORRECT_TAB', tabId: 2, category: 'Study' });
+  await sorting;
+  const { placements } = await send(listeners, { type: 'GET_SORT_STATE' });
+  assert(placements[2].basis === null, `the correction's re-sort was lost: ${JSON.stringify(placements[2])}`);
+  assert(placements[3]?.category === 'Study', 'the new tab was sorted');
+});
+
+test('a tab closed while a slow sort runs is not brought back', async () => {
+  const { api, listeners, openTabs } = await boot([tab(1, 'study'), tab(2, 'shop')]);
+  await api.runAutoSort();
+  openTabs.push(tab(3, 'study'));
+  const classify = chrome.runtime.sendMessage;
+  chrome.runtime.sendMessage = async (m) => { await new Promise(r => setTimeout(r, 30)); return classify(m); };
+  const sorting = api.runAutoSort();
+  await new Promise(r => setTimeout(r, 5));
+  openTabs.splice(1, 1);
+  await listeners.onRemoved[0](2);
+  await sorting;
+  const { placements } = await send(listeners, { type: 'GET_SORT_STATE' });
+  assert(!placements[2] && placements[3], JSON.stringify(placements));
+});
+
 test('dragging into a group you made yourself is not a correction', async () => {
   const { api, listeners, openTabs, groups } = await boot([tab(1, 'shop')]);
   await api.runAutoSort();
@@ -455,18 +480,6 @@ test('picking a category in the popup moves the tab and can be forgotten', async
   assert(Object.keys((await send(listeners, { type: 'GET_CORRECTIONS' })).corrections).length === 0, 'forgotten');
   const bad = await send(listeners, { type: 'CORRECT_TAB', tabId: 1, category: 'Nonsense' });
   assert(bad.error, 'unknown category refused');
-});
-
-test('background.js and categories.js agree on what a correction is kept under', async () => {
-  const { api } = await boot([]);
-  const { correctionKey } = await import('../src/ml/categories.js');
-  for (const t of [
-    { url: 'https://www.hotstar.com/in/home' }, { url: 'https://in.pinterest.com/' },
-    { url: 'https://www.youtube.com/watch?v=a', channel: 'Manware' }, { url: 'https://www.youtube.com/' },
-    { url: 'https://www.google.co.in/search?q=x' }, { url: 'https://gemini.google.com/app' }, { url: 'chrome://newtab/' },
-  ]) {
-    assert(api.correctionKey(t) === correctionKey(t), `${t.url}: ${api.correctionKey(t)} vs ${correctionKey(t)}`);
-  }
 });
 
 test('Gemini Nano is off by default and can be switched on', async () => {

@@ -382,7 +382,6 @@ export function closestDescription(vector, descriptions) {
  * The key a correction is remembered under: the site, or for YouTube, the
  * channel, since one site holds every kind of video. Null where a correction
  * can't carry over to other pages: searches, and YouTube pages with no channel.
- * background.js has a copy of this; a test checks they agree.
  */
 export function correctionKey(tab) {
   const host = hostOf(tab.url);

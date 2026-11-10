@@ -19,7 +19,9 @@ The Chrome extension's config file (Manifest V3). Declares:
 - **Permissions**: `tabs` (read/reorder tabs), `storage` (chrome.storage.local),
   `scripting`, `tabGroups`.
 - **`background.service_worker`**: points to `background.js`, running as an
-  ES module (`"type": "module"`) so it can use `import`/`export`.
+  ES module (`"type": "module"`). Vite bundles it, so it imports `correctionKey`,
+  the category names and the student's `mergeExamples` from `src/ml/` instead of
+  keeping copies.
 - **`content_scripts`**: injects `content_script.js` into every page
   (`<all_urls>`) at `document_idle` (after the page's own scripts settle).
 - **`action.default_popup`**: `popup.html`, the UI entry point.
@@ -180,7 +182,14 @@ descriptions, because dmoz has no social or streaming labels (`training/README.m
   made, and keeps subcategory order. `editTabs` retries while Chrome refuses edits during
   a tab drag.
 - **`applySort`** handles **Sort now**, and **`undoLastSort`** restores from
-  `saveUndoState`.
+  `saveUndoState`. Only Sort now and snapshot restores save Undo state; an automatic
+  sort of a newly loaded tab doesn't, so it can't replace the Undo of a big sort.
+  Sort now classifies in the popup with your corrections and the trusted student
+  (`classifierOptions` in `pipeline.js`), but not Gemini Nano, which is too slow for
+  a whole window.
+- **`savePlacementUpdates`** saves what a sort decided under the store lock, reading
+  placements again first: classifying can take seconds, and in that time a tab may
+  close or a correction may ask for a tab to be sorted again. Both survive.
 - **Focus mode** stores `{ category, endsAt, allowedHosts }`, so it survives a worker
   restart. `enforceFocus` runs on tab activation and after sorting. Strict focus is opt-in,
   Unsure tabs are never blocked, and the blocked page can always allow a site or end
@@ -193,8 +202,9 @@ descriptions, because dmoz has no social or streaming labels (`training/README.m
   Threadline is moving tabs itself (`asOwnEdit`, plus 1.5 s after). A correction clears
   the `basis` of every open tab with the same key, so `runAutoSort` sorts them again.
   `classifyTabs` checks corrections before the rules; one without a subcategory picks the
-  closest subcategory inside that category. background.js has a copy of
-  `correctionKey`, and a test checks both agree.
+  closest subcategory inside that category. Forgetting a correction also deletes the
+  student examples it made (each example records its `site`, the correction key), and
+  retrains.
 - **Gemini Nano** (`src/ml/nano.js`) is passed to `classifyTabs` as `askModel` when it is
   switched on and `available`. It answers only with a `Category › Subcategory` label
   (`responseConstraint` enum), one tab per cloned session; anything it can't answer
@@ -209,9 +219,8 @@ descriptions, because dmoz has no social or streaming labels (`training/README.m
   2. The offscreen page answers, then embeds the tabs answered by Gemini Nano, the
      site list or a correction and sends them back as `STUDENT_EXAMPLES`. Answers
      from the student or the description model are never learned from.
-  3. background.js merges them (`mergeStudentExamples`, a copy of `mergeExamples`; a
-     test checks they agree): newest 400, one per page, and a guess never replaces
-     your correction.
+  3. background.js merges them with `mergeExamples`: newest 400, one per page, and a
+     guess never replaces your correction.
   4. After 3 new examples it sends `TRAIN_STUDENT`. `buildStudent` trains on the
      pages not held back (`isHeldOut`, a hash, about 1 in 5), tests on the held-back
      Gemini Nano examples, then trains on everything. Category descriptions are

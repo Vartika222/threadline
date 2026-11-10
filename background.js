@@ -27,6 +27,8 @@
  *   START_FOCUS, END_FOCUS, GET_FOCUS, SET_STRICT_FOCUS, FOCUS_ALLOW, FOCUS_GO_BACK
  *                     → focus mode (see below)
  */
+import { CATEGORY_NAMES, correctionKey } from './src/ml/categories.js';
+import { mergeExamples, countSources, RETRAIN_EVERY } from './src/ml/student.js';
 
 // ─── State Management ─────────────────────────────────────────────────────
 
@@ -420,6 +422,25 @@ function forgetPlacement(tabId) {
   });
 }
 
+/**
+ * Saves placements worked out from an earlier read of them. Classifying can take
+ * seconds, so it re-reads under the lock: a tab closed meanwhile isn't brought
+ * back, and a tab whose entry changed meanwhile (a correction asked for it to be
+ * sorted again) keeps that request.
+ */
+function savePlacementUpdates(updates, readBefore) {
+  return withStoreLock(async () => {
+    const placements = await loadPlacements();
+    const open = new Set((await chrome.tabs.query({})).map(tab => tab.id));
+    for (const [id, placement] of Object.entries(updates)) {
+      if (!open.has(Number(id))) continue;
+      const changed = JSON.stringify(placements[id]) !== JSON.stringify(readBefore[id]);
+      placements[id] = changed ? { ...placement, basis: null } : placement;
+    }
+    await savePlacements(placements);
+  });
+}
+
 const isSortable = (tab) => /^https?:/.test(tab.url || '') && !tab.pinned;
 
 // Threadline's own tab moves fire the same events as yours. While it is moving
@@ -533,14 +554,16 @@ async function runAutoSort() {
     const { placements: results, categoryNames } = await classifyInBackground(tabs);
     const managed = new Set(categoryNames);
 
-    await saveUndoState(tabs.map(tab => tab.windowId));
+    // No Undo state here: this only moves newly loaded tabs, and saving it would
+    // replace the Undo of a Sort now or a snapshot restore.
+    const updates = {};
     for (let i = 0; i < tabs.length; i++) {
       // A tab put in place by a snapshot keeps its spot until it navigates away.
       const manual = placements[tabs[i].id]?.manual && placements[tabs[i].id].url === withoutHash(tabs[i].url);
-      placements[tabs[i].id] = { url: withoutHash(tabs[i].url), basis: sortBasis(store, tabs[i]), ...results[i], ...(manual && { manual }) };
-      if (!manual) await placeTabInGroup(tabs[i], results[i], managed, placements);
+      updates[tabs[i].id] = { url: withoutHash(tabs[i].url), basis: sortBasis(store, tabs[i]), ...results[i], ...(manual && { manual }) };
+      if (!manual) await placeTabInGroup(tabs[i], results[i], managed, { ...placements, ...updates });
     }
-    await savePlacements(placements);
+    await savePlacementUpdates(updates, placements);
 
     const [active] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
     if (active) {
@@ -608,6 +631,7 @@ async function applySort(entries) {
     return tab && !tab.pinned && !isUserGrouped(tab);
   });
   await saveUndoState([windowTabs[0]?.windowId]);
+  const placementsBefore = await loadPlacements();
 
   // Empty the old groups first: moving a tab across a group would pull it in.
   const managedTabs = live.map(entry => entry.tabId).filter(id => {
@@ -618,7 +642,7 @@ async function applySort(entries) {
 
   const result = await applyTabOrder(live.map(entry => entry.tabId));
 
-  const placements = await loadPlacements();
+  const updates = {};
   const store = await loadTabStore();
   const tabsAfter = await chrome.tabs.query({ currentWindow: true });
   const stillOpen = new Set(tabsAfter.map(tab => tab.id));
@@ -627,13 +651,13 @@ async function applySort(entries) {
     if (!stillOpen.has(tabId)) continue;
     if (!byCategory.has(placement.category)) byCategory.set(placement.category, { placement, tabIds: [] });
     byCategory.get(placement.category).tabIds.push(tabId);
-    placements[tabId] = { url: withoutHash(byId.get(tabId).url), basis: sortBasis(store, byId.get(tabId)), ...placement };
+    updates[tabId] = { url: withoutHash(byId.get(tabId).url), basis: sortBasis(store, byId.get(tabId)), ...placement };
   }
   for (const { placement, tabIds } of byCategory.values()) {
     const groupId = await editTabs(() => chrome.tabs.group({ tabIds, createProperties: { windowId: tabsAfter[0].windowId } }));
     await editTabs(() => chrome.tabGroups.update(groupId, { title: placement.category, color: placement.color }));
   }
-  await savePlacements(placements);
+  await savePlacementUpdates(updates, placementsBefore);
 
   const active = tabsAfter.find(tab => tab.active);
   if (active) await showTabCategoryOnBadge(active.id);
@@ -645,7 +669,7 @@ async function applySort(entries) {
 function isManagedTitle(title, managed) {
   return managed.has(title) || KNOWN_GROUP_TITLES.has(title);
 }
-const KNOWN_GROUP_TITLES = new Set(['Study', 'Work', 'Jobs & Hiring', 'Entertainment', 'Games', 'Social', 'Shopping & Art', 'News', 'Life & Other']);
+const KNOWN_GROUP_TITLES = new Set(CATEGORY_NAMES);
 
 /** Records how the tabs are arranged, so Undo can put them back. */
 async function saveUndoState(windowIds) {
@@ -669,7 +693,7 @@ async function undoLastSort() {
 
   // Put categories back too. Tabs sorted for the first time keep their entry, so
   // automatic sorting doesn't immediately redo what was just undone.
-  await savePlacements({ ...(await loadPlacements()), ...state.placements });
+  await withStoreLock(async () => savePlacements({ ...(await loadPlacements()), ...state.placements }));
 
   for (const { windowId, tabs, groups } of state.windows) {
     const open = new Map((await chrome.tabs.query({ windowId })).map(tab => [tab.id, tab]));
@@ -843,18 +867,6 @@ chrome.alarms.onAlarm.addListener(async ({ name }) => {
 const CORRECTIONS_KEY = 'site_corrections';   // correctionKey → { category, subcategory?, at }
 const NANO_KEY = 'use_gemini_nano';
 const NANO_STATUS_KEY = 'gemini_nano_status';
-const SEARCH_SITES = /^(google\.[a-z.]+|bing\.com|duckduckgo\.com|search\.yahoo\.com)$/;
-
-/** Same as correctionKey in src/ml/categories.js, which this file can't import. */
-function correctionKey(tab) {
-  const host = safeHostname(tab.url).replace(/^www\./, '');
-  if (!host || !/^https?:/.test(tab.url || '') || SEARCH_SITES.test(host)) return null;
-  if (host === 'youtube.com' || host === 'm.youtube.com') {
-    const channel = (tab.channel || '').trim().toLowerCase();
-    return channel ? `youtube:${channel}` : null;
-  }
-  return host;
-}
 
 async function loadCorrections() {
   const { [CORRECTIONS_KEY]: corrections } = await chrome.storage.local.get(CORRECTIONS_KEY);
@@ -901,12 +913,19 @@ async function correctTab(tabId, category, subcategory = null) {
   return { ok: true, key };
 }
 
+/** Forgets a correction, and the student examples it made, so the student unlearns it too. */
 async function forgetCorrection(key) {
+  let untrained = false;
   await withStoreLock(async () => {
     const corrections = await loadCorrections();
     delete corrections[key];
-    await chrome.storage.local.set({ [CORRECTIONS_KEY]: corrections });
+    const { [STUDENT_EXAMPLES_KEY]: examples = [] } = await chrome.storage.local.get(STUDENT_EXAMPLES_KEY);
+    // Older examples have no site; their page's site is the same for anything but YouTube channels.
+    const kept = examples.filter(e => !(e.source === 'correction' && (e.site ?? correctionKey({ url: e.key })) === key));
+    untrained = kept.length < examples.length;
+    await chrome.storage.local.set({ [CORRECTIONS_KEY]: corrections, [STUDENT_EXAMPLES_KEY]: kept });
   });
+  if (untrained) trainStudent().catch(err => console.warn('[Threadline] Training the student failed:', err.message));
   return { ok: true };
 }
 
@@ -937,9 +956,6 @@ const STUDENT_EXAMPLES_KEY = 'student_examples';   // [{ key, vector, label, sou
 const STUDENT_MODEL_KEY = 'student_model';         // what buildStudent returns
 const STUDENT_NEW_KEY = 'student_new_examples';    // examples since the last training
 const STUDENT_SPEED_KEY = 'student_speed';         // running totals for the Model page
-const STUDENT_MAX_EXAMPLES = 400;                  // same as MAX_EXAMPLES in student.js
-const STUDENT_RETRAIN_EVERY = 3;                   // same as RETRAIN_EVERY in student.js
-const STUDENT_SOURCES = new Set(['nano', 'rules', 'correction']);
 let studentTraining = null;
 
 async function loadStudent() {
@@ -947,31 +963,14 @@ async function loadStudent() {
   return model || null;
 }
 
-/**
- * Same as mergeExamples in src/ml/student.js, which this file can't import: a
- * page seen again replaces its old example (but a guess never replaces your
- * correction), and only the newest examples are kept. A test checks they agree.
- */
-function mergeStudentExamples(stored, incoming, max = STUDENT_MAX_EXAMPLES) {
-  const byKey = new Map(stored.map(e => [e.key, e]));
-  for (const example of incoming) {
-    if (!example?.key || !STUDENT_SOURCES.has(example.source) || !Array.isArray(example.vector)) continue;
-    const old = byKey.get(example.key);
-    if (old && old.source === 'correction' && example.source !== 'correction') continue;
-    byKey.delete(example.key);
-    byKey.set(example.key, example);
-  }
-  return [...byKey.values()].sort((a, b) => (a.at || 0) - (b.at || 0)).slice(-max);
-}
-
 async function addStudentExamples(incoming) {
   let shouldTrain = false;
   await withStoreLock(async () => {
     const got = await chrome.storage.local.get([STUDENT_EXAMPLES_KEY, STUDENT_NEW_KEY]);
-    const examples = mergeStudentExamples(got[STUDENT_EXAMPLES_KEY] || [], incoming || []);
+    const examples = mergeExamples(got[STUDENT_EXAMPLES_KEY] || [], incoming || []);
     const fresh = (got[STUDENT_NEW_KEY] || 0) + (incoming || []).length;
     await chrome.storage.local.set({ [STUDENT_EXAMPLES_KEY]: examples, [STUDENT_NEW_KEY]: fresh });
-    shouldTrain = fresh >= STUDENT_RETRAIN_EVERY;
+    shouldTrain = fresh >= RETRAIN_EVERY;
   });
   if (shouldTrain) trainStudent().catch(err => console.warn('[Threadline] Training the student failed:', err.message));
   return { ok: true };
@@ -1014,11 +1013,9 @@ async function studentSummary() {
   const got = await chrome.storage.local.get([STUDENT_MODEL_KEY, STUDENT_EXAMPLES_KEY, STUDENT_NEW_KEY, STUDENT_SPEED_KEY]);
   const model = got[STUDENT_MODEL_KEY];
   const examples = got[STUDENT_EXAMPLES_KEY] || [];
-  const counts = { nano: 0, correction: 0, rules: 0 };
-  for (const e of examples) counts[e.source] = (counts[e.source] || 0) + 1;
   return {
     examples: examples.length,
-    counts,
+    counts: countSources(examples),
     newSinceTraining: got[STUDENT_NEW_KEY] || 0,
     model: model ? {
       evaluation: model.evaluation,
@@ -1162,8 +1159,6 @@ globalThis.threadline = {
   saveSnapshot,
   restoreSnapshot,
   correctTab,
-  correctionKey,
-  mergeStudentExamples,
 };
 
 // ─── Message Handlers (from popup and content scripts) ────────────────────

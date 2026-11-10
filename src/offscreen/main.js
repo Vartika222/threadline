@@ -10,9 +10,9 @@
  * (Gemini Nano's, the site list's and your corrections), so the student keeps
  * training on them. background.js stores them and asks this page to retrain.
  */
-import { classifyTabs, placementFor, descriptionExamples, CATEGORY_NAMES } from '../ml/categories.js';
+import { classifyTabs, placementFor, descriptionExamples, correctionKey, CATEGORY_NAMES } from '../ml/categories.js';
 import { nanoStatus, classifyWithNano } from '../ml/nano.js';
-import { predictStudent, buildStudent, compactVector, exampleKey, CONFIDENCE } from '../ml/student.js';
+import { trustedStudent, buildStudent, compactVector, exampleKey } from '../ml/student.js';
 
 // Imported only when needed, so sites on the known list never load the model.
 const embed = async (texts) => (await import('../ml/embedder.js')).embedTexts(texts);
@@ -27,11 +27,6 @@ async function classify({ tabs, corrections = {}, useNano = false, student = nul
   const nano = useNano ? await nanoStatus() : 'off';
   const timing = { studentTabs: 0, studentMs: 0, nanoTabs: 0, nanoMs: 0 };
 
-  // The student only answers once it has passed its test.
-  const trustedStudent = student?.trusted ? {
-    confidence: CONFIDENCE,
-    predict: (vector) => predictStudent(student, vector),
-  } : null;
 
   const askModel = nano === 'available' ? async (list) => {
     const started = performance.now();
@@ -54,7 +49,7 @@ async function classify({ tabs, corrections = {}, useNano = false, student = nul
     return vectors;
   };
 
-  const results = await classifyTabs(tabs, timedEmbed, { corrections, askModel, student: trustedStudent, withText: true });
+  const results = await classifyTabs(tabs, timedEmbed, { corrections, askModel, student: trustedStudent(student), withText: true });
   timing.studentTabs = results.filter(r => r.source === 'student').length;
 
   return {
@@ -65,7 +60,7 @@ async function classify({ tabs, corrections = {}, useNano = false, student = nul
       timing,
     },
     learnable: results.flatMap((result, i) => (LEARN_FROM.has(result.source) && /^https?:/.test(tabs[i].url || '')
-      ? [{ ...result, url: tabs[i].url }] : [])),
+      ? [{ ...result, url: tabs[i].url, site: correctionKey(tabs[i]) }] : [])),
   };
 }
 
@@ -77,6 +72,7 @@ async function sendExamples(learnable) {
   const at = Date.now();
   const examples = learnable.map(r => ({
     key: exampleKey(r.url),
+    site: r.site, // what a correction is kept under, so forgetting it can remove this
     vector: compactVector(r.vector),
     label: `${r.category} › ${r.subcategory}`,
     source: r.source,

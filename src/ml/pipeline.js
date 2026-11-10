@@ -17,6 +17,18 @@ import { buildSimilarityMatrix, buildChainOrder } from './graph.js';
 import { classifyTabs, placementFor, CATEGORY_NAMES }               from './categories.js';
 import { consumeImplicitPairs }                                    from './implicitFeedback.js';
 import { isPersonalisationEnabled, loadAdjustments, scoreAllPairs } from './personalise.js';
+import { trustedStudent }                                         from './student.js';
+
+/**
+ * Your corrections and the trained student, as automatic sorting uses them
+ * (background.js stores both), so Sort now puts tabs in the same groups.
+ * Gemini Nano is left out: at about 3.5 s a tab, a whole window would take minutes.
+ */
+export async function classifierOptions() {
+  const { site_corrections: corrections = {}, student_model: model = null } =
+    await chrome.storage.local.get(['site_corrections', 'student_model']);
+  return { corrections, student: trustedStudent(model) };
+}
 
 /**
  * Puts tabs into one fixed order that doesn't depend on the tab strip.
@@ -81,7 +93,7 @@ export async function runMLPipeline(inputTabs, onProgress = () => {}) {
 
   // ── STEP 3: CATEGORISE ────────────────────────────────────────────────
   onProgress('Sorting into categories...');
-  const placements = (await classifyTabs(tabs, embedTexts)).map(placementFor);
+  const placements = (await classifyTabs(tabs, embedTexts, await classifierOptions())).map(placementFor);
 
   // ── STEP 4: CHAIN ─────────────────────────────────────────────────────
   // Categories in their fixed order, then subcategories, and within each
@@ -114,7 +126,7 @@ export async function runMLPipeline(inputTabs, onProgress = () => {}) {
 
 /** A one-tab sort has nothing to chain, but still needs its category. */
 async function categoriseAlone(tabs) {
-  const [placement] = (await classifyTabs(tabs, embedTexts)).map(placementFor);
+  const [placement] = (await classifyTabs(tabs, embedTexts, await classifierOptions())).map(placementFor);
   tabs[0].placement = placement;
   return {
     chain: [{ ...tabs[0], chainPosition: 0, similarityToNext: null }],

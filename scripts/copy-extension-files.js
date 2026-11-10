@@ -6,14 +6,11 @@
  *
  * Files Vite does NOT handle:
  *   - manifest.json      (copied as-is)
- *   - background.js      (MV3 service worker — must be a flat file, not a module bundle)
- *   - content_script.js  (injected into pages — same constraint)
+ *   - content_script.js  (content scripts can't be ES modules, so it stays one flat file)
  *   - icons/             (static assets)
  *
- * WHY background.js and content_script.js aren't bundled by Vite:
- * Chrome MV3 service workers have strict constraints on how they're loaded.
- * For V0/V1, keeping them as plain JS files is the simplest approach.
- * For V2+, you'd add them as separate Rollup entry points.
+ * background.js is bundled by Vite: the manifest loads it as an ES module, so
+ * it imports the shared code in src/ml/ instead of keeping copies.
  */
 
 import fs from 'fs';
@@ -49,7 +46,6 @@ function copyDir(src, dest) {
 console.log('\nCopying extension files to dist/...');
 
 copyFile(path.join(ROOT, 'manifest.json'),       path.join(DIST, 'manifest.json'));
-copyFile(path.join(ROOT, 'background.js'),        path.join(DIST, 'background.js'));
 copyFile(path.join(ROOT, 'content_script.js'),    path.join(DIST, 'content_script.js'));
 copyFile(path.join(ROOT, 'blocked.html'),         path.join(DIST, 'blocked.html'));
 copyFile(path.join(ROOT, 'blocked.js'),           path.join(DIST, 'blocked.js'));

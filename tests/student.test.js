@@ -210,13 +210,33 @@ test('Forget clears the examples and the model', async () => {
   assert(summary.examples === 0 && summary.model === null, JSON.stringify(summary));
 });
 
-test('background.js merges examples the same way as student.js', async () => {
-  const { api } = await boot();
-  const stored = [example(1, 0, 'correction'), example(2, 1), example(3, 2)];
-  const incoming = [example(1, 5, 'nano'), { ...example(2, 4), at: 50 }, example(9, 3, 'rules'), { ...example(10, 0), source: 'model' }];
-  const a = api.mergeStudentExamples(stored, incoming, 3).map(e => `${e.key}:${e.label}`).join();
-  const b = student.mergeExamples(stored, incoming, 3).map(e => `${e.key}:${e.label}`).join();
-  assert(a === b, `${a}\nvs\n${b}`);
+test('forgetting a correction removes the student examples it made', async () => {
+  const { send, local } = await boot();
+  const yours = { ...example(1, 0, 'correction'), site: 'site1.test' };
+  const channel = { ...example(2, 0, 'correction'), key: 'https://www.youtube.com/watch?v=a', site: 'youtube:manware' };
+  await send({ type: 'STUDENT_EXAMPLES', examples: [yours, channel, example(3, 1)] });
+  await send({ type: 'FORGET_CORRECTION', key: 'site1.test' });
+  await send({ type: 'FORGET_CORRECTION', key: 'youtube:manware' });
+  await settle();
+  const left = local.student_examples.map(e => e.key);
+  assert(left.length === 1 && left[0] === 'https://site3.test/', left.join());
+});
+
+section('Sort now');
+
+test('Sort now uses your corrections and a trusted student, like automatic sorting', async () => {
+  installChromeMock();
+  const { classifierOptions } = await import('../src/ml/pipeline.js');
+  const { CATEGORIES } = await import('../src/ml/categories.js');
+  const work = Object.keys(CATEGORIES.find(c => c.name === 'Work').subcategories)[0];
+  await chrome.storage.local.set({ site_corrections: { 'someblog.test': { category: 'Work', subcategory: work } } });
+  const options = await classifierOptions();
+  assert(options.student === null, 'no student until one is stored and trusted');
+  const [answer] = await classifyTabs([{ url: 'https://someblog.test/post', title: 'A post' }], async (texts) => texts.map(() => near(0)), options);
+  assert(answer.source === 'correction' && answer.category === 'Work', JSON.stringify(answer));
+
+  await chrome.storage.local.set({ student_model: { ...student.buildStudent(examples(80)), trusted: true } });
+  assert((await classifierOptions()).student?.confidence === student.CONFIDENCE, 'trusted student passed on');
 });
 
 await done();
