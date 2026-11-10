@@ -42,7 +42,7 @@ import {
 
 /** The pixel squirrel, drawn from squirrel.js. */
 function Squirrel({ className }) {
-  return <span className={className} aria-hidden="true" dangerouslySetInnerHTML={{ __html: squirrelSvg({ size: 22 }) }} />;
+  return <span className={className} aria-hidden="true" dangerouslySetInnerHTML={{ __html: squirrelSvg({ size: 32 }) }} />;
 }
 
 export default function App() {

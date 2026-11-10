@@ -638,7 +638,7 @@ input[type="checkbox"] { accent-color: var(--text-primary); }
 
 .header { background: var(--bg-primary); border-bottom: 1px solid var(--border); padding: 14px 16px 12px; }
 .logo { gap: 10px; }
-.logo-mark { width: 22px; height: 22px; image-rendering: pixelated; }
+.logo-mark { width: 32px; height: 32px; image-rendering: pixelated; }
 .logo-text { font-size: 14px; font-weight: 700; letter-spacing: -0.04em; text-transform: uppercase; }
 .snapshot-btn, .sort-btn, .apply-btn, .cancel-btn {
   background: transparent;
