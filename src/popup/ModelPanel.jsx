@@ -51,7 +51,9 @@ export default function ModelPanel() {
     return () => clearInterval(timer);
   }, [status]);
 
-  const openStatusPage = () => chrome.tabs.create({ url: 'chrome://on-device-internals' });
+  // chrome://components works without turning on Chrome's debug pages. The
+  // model is listed there as "Optimization Guide On Device Model".
+  const openStatusPage = () => chrome.tabs.create({ url: 'chrome://components' });
 
   async function handleDownload() {
     setError(null);
@@ -136,11 +138,15 @@ export default function ModelPanel() {
           ) : (
             <button className="apply-btn wide" onClick={handleDownload}>Show download progress</button>
           )}
-          <button className="cancel-btn wide" onClick={openStatusPage}>Open Chrome's model status page</button>
+          <button className="cancel-btn wide" onClick={openStatusPage}>Open Chrome's components page</button>
+          <div className="snapshot-meta">Find "Optimization Guide On Device Model" and click Check for update.</div>
         </>
       )}
       {(status === 'unavailable' || status === 'no-answer') && (
-        <button className="cancel-btn wide" onClick={openStatusPage}>Open Chrome's model status page</button>
+        <>
+          <button className="cancel-btn wide" onClick={openStatusPage}>Open Chrome's components page</button>
+          <div className="snapshot-meta">Find "Optimization Guide On Device Model" and click Check for update.</div>
+        </>
       )}
 
       {status === 'available' && (
