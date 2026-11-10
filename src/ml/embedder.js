@@ -85,9 +85,16 @@ export async function embedTexts(texts, onProgress) {
   const extractor = await loadModel();
 
   if (onProgress) onProgress(`Embedding ${texts.length} tabs...`);
-  const output = await extractor(texts, { pooling: 'mean', normalize: true });
-  const embeddings = output.tolist();
-  output.dispose?.();
+  // One text at a time. In a batch, shorter texts are padded to the longest,
+  // and with the quantised model that shifts their vectors slightly, so a tab
+  // could land in a different category depending on which tabs were sorted
+  // with it. Alone, the same text always gives the same vector.
+  const embeddings = [];
+  for (const text of texts) {
+    const output = await extractor([text], { pooling: 'mean', normalize: true });
+    embeddings.push(output.tolist()[0]);
+    output.dispose?.();
+  }
   return embeddings;
 }
 

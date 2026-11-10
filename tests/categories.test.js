@@ -90,10 +90,33 @@ test('a programming video on YouTube counts as Study, not Developer Tools', asyn
   is(site, 'Work');
 });
 
-test('careers pages go to Work › Jobs', () => {
-  is(classifyByRules({ url: 'https://careers.ibm.com/en_US/careers/JobDetail?jobId=1' }), 'Work', 'Jobs');
-  is(classifyByRules({ url: 'https://www.example.com/careers/' }), 'Work', 'Jobs');
+test('careers pages and application forms go to Jobs & Hiring › Applications', () => {
+  is(classifyByRules({ url: 'https://careers.ibm.com/en_US/careers/JobDetail?jobId=1' }), 'Jobs & Hiring', 'Applications');
+  is(classifyByRules({ url: 'https://www.example.com/careers/' }), 'Jobs & Hiring', 'Applications');
+  is(classifyByRules({ url: 'https://www.google.com/about/careers/applications/' }), 'Jobs & Hiring', 'Applications');
+  is(classifyByRules({ url: 'https://www.amazon.jobs/en/jobs/123' }), 'Jobs & Hiring', 'Applications');
+  is(classifyByRules({ url: 'https://career5.successfactors.eu/careers?company=x' }), 'Jobs & Hiring', 'Applications');
+  is(classifyByRules({ url: 'https://www.ycombinator.com/jobs' }), 'Jobs & Hiring', 'Applications');
+  is(classifyByRules({ url: 'https://boards.greenhouse.io/stripe/jobs/123' }), 'Jobs & Hiring', 'Applications');
+  is(classifyByRules({ url: 'https://jobs.lever.co/netflix/abc' }), 'Jobs & Hiring', 'Applications');
+  is(classifyByRules({ url: 'https://nvidia.wd5.myworkdayjobs.com/en-US/NVIDIAExternalCareerSite' }), 'Jobs & Hiring', 'Applications');
   assert(classifyByRules({ url: 'https://www.example.com/careersblog' }).useModel, 'only a whole path segment counts');
+});
+
+test('job boards, LinkedIn jobs, resumes and salaries go to Jobs & Hiring', () => {
+  is(classifyByRules({ url: 'https://www.naukri.com/software-jobs' }), 'Jobs & Hiring', 'Job Boards');
+  is(classifyByRules({ url: 'https://wellfound.com/jobs' }), 'Jobs & Hiring', 'Job Boards');
+  is(classifyByRules({ url: 'https://www.linkedin.com/jobs/view/123' }), 'Jobs & Hiring', 'Job Boards');
+  is(classifyByRules({ url: 'https://www.linkedin.com/feed/' }), 'Social', 'Feeds');
+  is(classifyByRules({ url: 'https://www.glassdoor.co.in/Reviews/index.htm' }), 'Jobs & Hiring', 'Resumes & Research');
+  is(classifyByRules({ url: 'https://www.levels.fyi/' }), 'Jobs & Hiring', 'Resumes & Research');
+});
+
+test('build logs with "job" in the address are not job pages', () => {
+  is(classifyByRules({ url: 'https://github.com/o/r/actions/runs/1/job/2' }), 'Work', 'Developer Tools');
+  is(classifyByRules({ url: 'https://gitlab.com/g/p/-/jobs/3' }), 'Work', 'Developer Tools');
+  is(classifyByRules({ url: 'https://github.com/someone/jobs' }), 'Work', 'Developer Tools');
+  assert(classifyByRules({ url: 'https://ci.example.com/view/all/job/build/12/' }).useModel, 'deep job paths left to the model');
 });
 
 test('YouTube Music counts as Music', () => {
@@ -161,8 +184,8 @@ test('every known site names a real category and subcategory', () => {
   }
 });
 
-test('there are exactly the 8 agreed categories', () => {
-  assert(CATEGORIES.map(c => c.name).join() === 'Study,Work,Entertainment,Games,Social,Shopping & Art,News,Life & Other', 'category list changed');
+test('there are exactly the 9 agreed categories', () => {
+  assert(CATEGORIES.map(c => c.name).join() === 'Study,Work,Jobs & Hiring,Entertainment,Games,Social,Shopping & Art,News,Life & Other', 'category list changed');
 });
 
 section('text');

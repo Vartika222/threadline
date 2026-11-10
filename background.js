@@ -645,7 +645,7 @@ async function applySort(entries) {
 function isManagedTitle(title, managed) {
   return managed.has(title) || KNOWN_GROUP_TITLES.has(title);
 }
-const KNOWN_GROUP_TITLES = new Set(['Study', 'Work', 'Entertainment', 'Games', 'Social', 'Shopping & Art', 'News', 'Life & Other']);
+const KNOWN_GROUP_TITLES = new Set(['Study', 'Work', 'Jobs & Hiring', 'Entertainment', 'Games', 'Social', 'Shopping & Art', 'News', 'Life & Other']);
 
 /** Records how the tabs are arranged, so Undo can put them back. */
 async function saveUndoState(windowIds) {
