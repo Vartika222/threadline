@@ -16,6 +16,7 @@
  * to chrome.storage is lost. Keep UI state lightweight.
  */
 
+import { squirrelSvg } from './squirrel.js';
 import React, { useState, useEffect } from 'react';
 import TabChain, { CLUSTER_COLORS } from './TabChain.jsx';
 import SortButton from './SortButton.jsx';
@@ -38,6 +39,11 @@ import {
   setPersonalisationEnabled,
   ACTIVATION_THRESHOLD,
 } from '../ml/personalise.js';
+
+/** The pixel squirrel, drawn from squirrel.js. */
+function Squirrel({ className }) {
+  return <span className={className} aria-hidden="true" dangerouslySetInnerHTML={{ __html: squirrelSvg({ size: 32 }) }} />;
+}
 
 export default function App() {
   const [view, setView] = useState('idle');
@@ -217,7 +223,7 @@ export default function App() {
       {/* Header */}
       <header className="header">
         <div className="logo">
-          <span className="logo-mark">⬡</span>
+          <Squirrel className="logo-mark" />
           <span className="logo-text">Threadline</span>
         </div>
         <button className="snapshot-btn" onClick={handleSnapshot} title="Save this window's tabs, order and groups">

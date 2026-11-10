@@ -17,13 +17,14 @@ Chrome Web Store.
 1. **Read.** A content script reads each page's title, meta description, top
    headings and first paragraph, plus the channel and YouTube's own category
    (Education, Music, Gaming, ...) on YouTube videos.
-2. **Categorise.** Each tab gets one of 8 categories and a subcategory:
+2. **Categorise.** Each tab gets one of 9 categories and a subcategory:
 
    | Category | Subcategories |
    | --- | --- |
    | Study | Courses & Lectures, Practice & Coding Prep, Reference, Science |
-   | Work | Developer Tools, Business & Finance, Productivity, Jobs |
-   | Entertainment | Streaming, Music, Sports |
+   | Work | Developer Tools, Business & Finance, Productivity, AI Tools |
+   | Jobs & Hiring | Job Boards, Applications, Resumes & Research |
+   | Entertainment | Streaming, Music, Sports, Reading |
    | Games | Browser Games, Game Stores, Gaming News |
    | Social | Messaging, Feeds, Forums, Inspiration |
    | Shopping & Art | Clothing, Electronics, Marketplaces, Fashion & Beauty, Art & Design, Books & Culture |
@@ -35,6 +36,11 @@ Chrome Web Store.
      category YouTube lists for it, then its title, so a lecture lands in Study and
      the homepage in Entertainment. Switching video inside YouTube re-sorts the tab. A Google search
      is judged by what was searched for.
+   - **Job pages** go to Jobs & Hiring, whatever the company does: job boards,
+     LinkedIn's job search, application forms (Greenhouse, Lever, Workday and
+     others), `careers.` and `jobs.` subdomains, `.jobs` sites, and addresses whose
+     first or second part is `careers` or `jobs`. Build logs on developer sites,
+     which also say "job", are left alone.
    - **A known sites list** for common sites. This needs no model.
    - **The language model** for everything else. A pretrained neural network,
      `all-MiniLM-L6-v2` (run with Transformers.js on WebAssembly), compares the page
@@ -136,15 +142,21 @@ categories, captured from their homepages:
 
 | Test | Correct |
 | --- | ---: |
-| Sites, language model alone (no known sites list) | **78 of 83 (94%)** |
+| Sites, language model alone (no known sites list) | **77 of 83 (93%)** |
 | YouTube videos by title | 22 of 22 |
-| Google searches | 9 of 9 |
+| Google searches | 8 of 9 |
 
 Treat these as optimistic. I chose the test sites, they're homepages, and I adjusted
 a description after seeing the search and video tests, which I also wrote by hand.
 Those two tests are small. With the known sites list the site score reaches 100%,
 but most of those sites are on the list, so that number says nothing. Mistakes on the
 sites were art sites going to Social and government or health sites going to News.
+
+Each text is embedded on its own. In a batch, the quantised model gives a slightly
+different vector depending on what else is in it, so a tab's category could change
+with the tabs sorted alongside it. Embedding one at a time fixed that, and cost one
+site and one search that had only been right by that luck ("what is photosynthesis"
+now lands in Social by 0.007).
 
 A small neural network trained on `dmoz.csv` (1.2M website descriptions) got only
 63% on held-out real sites, against 90% for the descriptions on the same sites, so it
@@ -210,9 +222,9 @@ category description) and is tested on the fifth it never saw:
 
 | | Right on unseen sites |
 | --- | ---: |
-| Description matching (the current model) | 78/83 (94%) |
+| Description matching (the current model) | 77/83 (93%) |
 | Trained student, every answer | 72/83 (87%) |
-| Trained student, only when sure (≥ 0.6) | 40/40 (100%), on 48% of sites |
+| Trained student, only when sure (≥ 0.6) | 36/36 (100%), on 43% of sites |
 
 On its own, the student is worse than description matching after 66 examples, so it
 never answers alone: it answers only when it's sure, which was always right here,
@@ -233,7 +245,9 @@ src/offscreen/       Hidden page that classifies tabs for the service worker
 blocked.html/.js     The page strict focus shows
 public/model/        The language model, bundled (see THIRD_PARTY_NOTICES.md)
 training/            Scripts to fine-tune the language model and train a category network
-src/popup/           React popup UI
+src/popup/           React popup UI (squirrel.js holds the pixel squirrel)
+site/index.html      Landing page: one self-contained file, open it in a browser
+brand/               node brand/squirrel.mjs writes brand/squirrel.svg
 tests/               Plain-Node tests (+ chrome.* mock in tests/helpers)
 eval/                labelled tabs + chain-quality benchmark
 ```

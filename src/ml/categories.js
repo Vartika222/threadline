@@ -34,7 +34,14 @@ export const CATEGORIES = [
       'Business & Finance': ['business software for companies and sales teams', 'company finance, accounting and invoices'],
       'Productivity': ['project management and team collaboration software', 'email, calendar, documents and productivity tools', 'self-improvement, building good habits, motivation and personal productivity tips'],
       'AI Tools': ['AI chatbot and assistant that answers questions, writes and codes'],
-      'Jobs': ['job search, careers and hiring'],
+    },
+  },
+  {
+    name: 'Jobs & Hiring', color: 'yellow', hex: '#EAB308',
+    subcategories: {
+      'Job Boards': ['job listings, job openings and internships for candidates', 'find a job and get hired, search jobs by role'],
+      'Applications': ['job application: upload your resume and apply for this role', 'careers at our company, open positions and hiring'],
+      'Resumes & Research': ['resume builder, CV templates and cover letters', 'company reviews, salaries and interview experiences'],
     },
   },
   {
@@ -134,11 +141,35 @@ export const KNOWN_SITES = {
   'grok.com': ['Work', 'AI Tools'], 'chat.mistral.ai': ['Work', 'AI Tools'], 'poe.com': ['Work', 'AI Tools'],
   'meta.ai': ['Work', 'AI Tools'], 'phind.com': ['Work', 'AI Tools'], 'slack.com': ['Work', 'Productivity'], 'trello.com': ['Work', 'Productivity'],
   'asana.com': ['Work', 'Productivity'], 'atlassian.com': ['Work', 'Productivity'], 'atlassian.net': ['Work', 'Productivity'],
-  'zoom.us': ['Work', 'Productivity'], 'mail.google.com': ['Work', 'Productivity'], 'docs.google.com': ['Work', 'Productivity'],
+  'zoom.us': ['Work', 'Productivity'], 'zoom.com': ['Work', 'Productivity'], 'mail.google.com': ['Work', 'Productivity'], 'docs.google.com': ['Work', 'Productivity'],
   'drive.google.com': ['Work', 'Productivity'], 'calendar.google.com': ['Work', 'Productivity'],
   'meet.google.com': ['Work', 'Productivity'], 'outlook.com': ['Work', 'Productivity'], 'office.com': ['Work', 'Productivity'],
   'salesforce.com': ['Work', 'Business & Finance'], 'hubspot.com': ['Work', 'Business & Finance'],
-  'naukri.com': ['Work', 'Jobs'], 'indeed.com': ['Work', 'Jobs'], 'internshala.com': ['Work', 'Jobs'],
+  // Jobs & Hiring
+  'naukri.com': ['Jobs & Hiring', 'Job Boards'], 'indeed.com': ['Jobs & Hiring', 'Job Boards'],
+  'internshala.com': ['Jobs & Hiring', 'Job Boards'], 'wellfound.com': ['Jobs & Hiring', 'Job Boards'],
+  'unstop.com': ['Jobs & Hiring', 'Job Boards'], 'instahyre.com': ['Jobs & Hiring', 'Job Boards'],
+  'cutshort.io': ['Jobs & Hiring', 'Job Boards'], 'hirist.tech': ['Jobs & Hiring', 'Job Boards'],
+  'foundit.in': ['Jobs & Hiring', 'Job Boards'], 'shine.com': ['Jobs & Hiring', 'Job Boards'],
+  'apna.co': ['Jobs & Hiring', 'Job Boards'], 'timesjobs.com': ['Jobs & Hiring', 'Job Boards'],
+  'monster.com': ['Jobs & Hiring', 'Job Boards'], 'ziprecruiter.com': ['Jobs & Hiring', 'Job Boards'],
+  'simplyhired.com': ['Jobs & Hiring', 'Job Boards'], 'dice.com': ['Jobs & Hiring', 'Job Boards'],
+  'workatastartup.com': ['Jobs & Hiring', 'Job Boards'], 'welcometothejungle.com': ['Jobs & Hiring', 'Job Boards'],
+  'remoteok.com': ['Jobs & Hiring', 'Job Boards'], 'weworkremotely.com': ['Jobs & Hiring', 'Job Boards'],
+  'upwork.com': ['Jobs & Hiring', 'Job Boards'],
+  // Where applications are filled in (applicant tracking systems)
+  'greenhouse.io': ['Jobs & Hiring', 'Applications'], 'lever.co': ['Jobs & Hiring', 'Applications'],
+  'myworkdayjobs.com': ['Jobs & Hiring', 'Applications'], 'ashbyhq.com': ['Jobs & Hiring', 'Applications'],
+  'smartrecruiters.com': ['Jobs & Hiring', 'Applications'], 'icims.com': ['Jobs & Hiring', 'Applications'],
+  'taleo.net': ['Jobs & Hiring', 'Applications'], 'workable.com': ['Jobs & Hiring', 'Applications'],
+  'jobvite.com': ['Jobs & Hiring', 'Applications'],
+  'glassdoor.com': ['Jobs & Hiring', 'Resumes & Research'], 'glassdoor.co.in': ['Jobs & Hiring', 'Resumes & Research'],
+  'ambitionbox.com': ['Jobs & Hiring', 'Resumes & Research'], 'levels.fyi': ['Jobs & Hiring', 'Resumes & Research'],
+  'teamblind.com': ['Jobs & Hiring', 'Resumes & Research'], 'resume.io': ['Jobs & Hiring', 'Resumes & Research'],
+  'zety.com': ['Jobs & Hiring', 'Resumes & Research'], 'novoresume.com': ['Jobs & Hiring', 'Resumes & Research'],
+  'kickresume.com': ['Jobs & Hiring', 'Resumes & Research'], 'enhancv.com': ['Jobs & Hiring', 'Resumes & Research'],
+  'resumeworded.com': ['Jobs & Hiring', 'Resumes & Research'], 'rezi.ai': ['Jobs & Hiring', 'Resumes & Research'],
+  'flowcv.com': ['Jobs & Hiring', 'Resumes & Research'],
   // Entertainment
   'hotstar.com': ['Entertainment', 'Streaming'], 'netflix.com': ['Entertainment', 'Streaming'],
   'primevideo.com': ['Entertainment', 'Streaming'], 'hulu.com': ['Entertainment', 'Streaming'],
@@ -263,6 +294,26 @@ export function classificationText(tab) {
  *
  * @returns {{category:string, subcategory:string}|{useModel:true, defaultTo?:object}}
  */
+/**
+ * Jobs & Hiring for a job page: a careers or jobs subdomain (careers.ibm.com,
+ * career5.successfactors.eu), the .jobs domain (amazon.jobs), or "careers" or
+ * "jobs" as one of the first two parts of the path (ibm.com/careers,
+ * google.com/about/careers). Deeper ones, and any on developer sites, are left
+ * alone: build logs live at addresses like github.com/o/r/actions/runs/1/job/2
+ * and gitlab.com/g/p/-/jobs/3. LinkedIn's job search is a job board.
+ */
+function jobPage(host, pathname, known) {
+  if ((host === 'linkedin.com' || host.endsWith('.linkedin.com')) && /^\/jobs(\/|$)/.test(pathname)) {
+    return { category: 'Jobs & Hiring', subcategory: 'Job Boards' };
+  }
+  const firstTwo = pathname.split('/').filter(Boolean).slice(0, 2).map(part => part.toLowerCase());
+  const jobPath = known?.subcategory !== 'Developer Tools' && firstTwo.some(part => /^(careers?|jobs)$/.test(part));
+  if (/^(careers?\d*|jobs)\./.test(host) || host.endsWith('.jobs') || jobPath) {
+    return { category: 'Jobs & Hiring', subcategory: 'Applications' };
+  }
+  return null;
+}
+
 export function classifyByRules(tab) {
   const host = hostOf(tab.url);
 
@@ -280,14 +331,16 @@ export function classifyByRules(tab) {
   }
 
   const known = lookUpKnownSite(host);
+  if (known?.category === 'Jobs & Hiring') return known;
+
+  // Job pages go to Jobs & Hiring, whatever the company does, even on a site
+  // that's on the list for something else (linkedin.com/jobs, ibm.com/careers).
+  const jobs = jobPage(host, new URL(tab.url).pathname, known);
+  if (jobs) return jobs;
+
   if (known) return known;
 
   if (REFUSED_PAGE.test(cleanTitle(tab.title))) return FALLBACK;
-
-  // A company's careers pages are about the job, whatever the company does.
-  if (/^(careers|jobs)\./.test(host) || /\/(careers|jobs)(\/|$)/i.test(new URL(tab.url).pathname)) {
-    return { category: 'Work', subcategory: 'Jobs' };
-  }
 
   if (SEARCH_ENGINES.test(host)) {
     // Judge a search by what was searched for. A search homepage has no topic.
