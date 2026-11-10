@@ -237,8 +237,43 @@ function stopListening() {
   window.removeEventListener('blur', stopDwell);
 }
 
+// ─── Notes from Threadline ────────────────────────────────────────────────
+
+/**
+ * A small note in the corner of the page ("Page stashed", or "You stashed 3
+ * things about this in March"). It lives in a shadow root so the page's styles
+ * can't touch it, goes away by itself, and a related note opens the memory page.
+ */
+function showToast({ text, related }) {
+  document.getElementById('threadline-toast')?.remove();
+  const host = document.createElement('div');
+  host.id = 'threadline-toast';
+  const root = host.attachShadow({ mode: 'closed' });
+  const note = document.createElement(related ? 'button' : 'div');
+  note.textContent = related ? `${text}\u00a0→` : text;
+  note.setAttribute('role', 'status');
+  root.innerHTML = `<style>
+    :host { all: initial; }
+    div, button { position: fixed; right: 20px; bottom: 20px; z-index: 2147483647; max-width: 320px;
+      padding: 12px 16px; background: #080808; color: #fcfcfc; border: 1px solid #393939; border-left: 2px solid #fe1e34;
+      font: 500 13px/1.4 -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; text-align: left;
+      box-shadow: 0 8px 24px rgba(0,0,0,.35); animation: in .2s ease-out; }
+    button { cursor: pointer; } button:hover, button:focus-visible { border-color: #fcfcfc; outline: none; }
+    @keyframes in { from { opacity: 0; transform: translateY(6px); } }
+    @media (prefers-reduced-motion: reduce) { div, button { animation: none; } }
+  </style>`;
+  root.appendChild(note);
+  if (related) note.onclick = () => { chrome.runtime.sendMessage({ type: 'OPEN_MEMORY', related }).catch(() => {}); host.remove(); };
+  document.documentElement.appendChild(host);
+  setTimeout(() => host.remove(), related ? 9000 : 2500);
+}
+
 // Listen for background asking for fresh data
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.type === 'TOAST') {
+    showToast(message);
+    return false;
+  }
   if (message.type === 'REQUEST_TAB_DATA') {
     withTabData(sendResponse);
     return true; // Keep message channel open for async response

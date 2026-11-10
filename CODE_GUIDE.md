@@ -322,6 +322,33 @@ the sort actually did. `simMatrix` lets it recalculate percentages after a drag.
 
 ---
 
+### 4j. Memory (`src/memory/`)
+
+A record of the pages you visit and what you stash, in IndexedDB (`db.js`), which
+the service worker, the offscreen page and the memory page can all open.
+`chrome.storage` holds only about 10 MB in all, so it isn't used for this.
+
+- **Recording** (background.js, `// ─── Memory`): `recordVisit` writes a visit on
+  every tab switch, navigation in the active tab, or window focus change, and keeps
+  each page's record (title, host, the days it was seen). `rememberPageText` stores
+  the text the content script sends; `rememberCategory` copies the category a tab was
+  sorted into. `memoryAllows` skips incognito, pause and excluded sites.
+- **Stash**: `stashFromTab` saves a page, quote or image (Alt+Shift+S via
+  `chrome.commands`, the right-click menu, or the popup's Stash button).
+- **Indexing**: a few seconds after changes, `indexMemory` sends `INDEX_MEMORY` to the
+  offscreen page, which embeds records marked `needsVector` (40 at a time), classifies
+  any without a category, and returns pages that match an older stash item
+  (`resurface`). background.js shows those as a note in the page, once a day per page.
+- **Thinking** (`memory.js`, no storage in it, tested in `memory.test.js`): `search`
+  ranks by meaning plus a lift when every word appears; `buildSessions` gives each
+  visit its time (until the next, at most 30 min; time away isn't counted);
+  `buildTrails` splits a session into related groups; `findProjects` gathers pages
+  across days around running averages. Two records are related at cosine 0.35, or
+  0.2 when they share a category: MiniLM gives same-topic titles about 0.3 to 0.5
+  and unrelated ones under 0.2.
+- **The page** (`MemoryApp.jsx`): search, Stash, Trails (last 7 days) and Projects
+  (last 30 days), plus pause, exclude and erase.
+
 ## 5. Popup UI (`src/popup/`)
 
 ### 5a. `main.jsx`
@@ -398,6 +425,7 @@ and the `chrome.tabs` event hooks, plus the small runner the newer files use.
 
 | File | What it proves |
 |---|---|
+| `memory.test.js` | Memory: search by meaning and by words, sessions (time per visit, time away, new sessions), trails split by topic and named from titles, projects needing pages over several days, names, links without vectors, and resurfacing only older related stash items |
 | `graph.test.js` | MST has N-1 edges, DFS visits every node once, `buildChainOrder` returns every tab once and is at least as strong as MST or greedy alone, local search never lowers the total, 200 tabs finish in under a second |
 | `categories.test.js` | The rules with no model: your tabs, YouTube homepage vs video vs study channel, searches by query, block pages, known sites naming real categories |
 | `sorting.test.js` | Automatic grouping, tabs moved by hand staying put, user groups left alone, retries during drags, Sort now, Undo, focus mode in gentle and strict form, snapshots: save, restore (order, groups, reopening), kept out of automatic sorting, Undo, delete |

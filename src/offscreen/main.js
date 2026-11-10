@@ -13,6 +13,8 @@
 import { classifyTabs, placementFor, descriptionExamples, correctionKey, CATEGORY_NAMES } from '../ml/categories.js';
 import { nanoStatus, classifyWithNano } from '../ml/nano.js';
 import { trustedStudent, buildStudent, compactVector, exampleKey } from '../ml/student.js';
+import { getAll, update } from '../memory/db.js';
+import { memoryText, resurface } from '../memory/memory.js';
 
 // Imported only when needed, so sites on the known list never load the model.
 const embed = async (texts) => (await import('../ml/embedder.js')).embedTexts(texts);
@@ -86,7 +88,57 @@ async function train({ examples }) {
   return { student: buildStudent(examples, seeds) };
 }
 
+const INDEX_BATCH = 40;
+
+/**
+ * Embeds pages and stash items that are new or whose text changed, gives a
+ * category to any without one, and says which open pages have related stash
+ * items (resurfacing). A batch at a time; `more` asks to be called again.
+ */
+async function indexMemory({ corrections = {} }) {
+  const [pages, stash] = await Promise.all([getAll('pages'), getAll('stash')]);
+  const todo = [
+    ...stash.filter(r => r.needsVector).map(record => ({ store: 'stash', key: record.id, record })),
+    ...pages.filter(r => r.needsVector).map(record => ({ store: 'pages', key: record.url, record })),
+  ];
+  const batch = todo.slice(0, INDEX_BATCH);
+  if (!batch.length) return { resurface: [] };
+
+  const vectors = await embed(batch.map(({ record }) => memoryText(record)));
+  const unsorted = batch.filter(({ record }) => !record.category);
+  const answers = unsorted.length ? await classifyTabs(
+    unsorted.map(({ record }) => ({ url: record.url, title: record.title, content: record.quote || record.text })),
+    embed, { corrections }) : [];
+  const categoryOf = new Map(unsorted.map((entry, i) => [entry, answers[i]]));
+
+  const notes = [];
+  for (let i = 0; i < batch.length; i++) {
+    const { store, key, record } = batch[i];
+    const vector = Float32Array.from(vectors[i]);
+    const answer = categoryOf.get(batch[i]);
+    const saved = await update(store, key, (current) => current && {
+      ...current,
+      vector,
+      // The text may have changed while this one was being embedded: then do it again.
+      needsVector: memoryText(current) !== memoryText(record),
+      category: current.category || answer?.category || null,
+      subcategory: current.subcategory || answer?.subcategory || null,
+    });
+    if (store === 'pages' && saved) {
+      const related = resurface(saved, stash);
+      if (related.length) notes.push({ url: saved.url, count: related.length, since: related[0].savedAt });
+    }
+  }
+  return { resurface: notes, more: todo.length > batch.length };
+}
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.type === 'INDEX_MEMORY') {
+    indexMemory(message)
+      .then(sendResponse)
+      .catch(err => sendResponse({ error: err.message }));
+    return true;
+  }
   if (message.type === 'CLASSIFY_TABS') {
     classify(message)
       .then(({ response, learnable }) => {

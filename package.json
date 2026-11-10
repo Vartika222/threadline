@@ -8,7 +8,7 @@
     "dev": "vite build --watch --mode development && node scripts/copy-extension-files.js",
     "build": "vite build && node scripts/copy-extension-files.js",
     "build:verify": "npm run build && node scripts/verify-build.js",
-    "test": "node tests/graph.test.js && node tests/feedback.test.js && node tests/recency.test.js && node tests/implicitFeedback.test.js && node tests/background.test.js && node tests/eval.test.js && node tests/determinism.test.js && node tests/retrain.test.js && node tests/personalise.test.js && node tests/contentScript.test.js && node tests/categories.test.js && node tests/sorting.test.js && node tests/embedder.test.js && node tests/nano.test.js && node tests/student.test.js",
+    "test": "node tests/graph.test.js && node tests/feedback.test.js && node tests/recency.test.js && node tests/implicitFeedback.test.js && node tests/background.test.js && node tests/eval.test.js && node tests/determinism.test.js && node tests/retrain.test.js && node tests/personalise.test.js && node tests/contentScript.test.js && node tests/categories.test.js && node tests/sorting.test.js && node tests/embedder.test.js && node tests/nano.test.js && node tests/student.test.js && node tests/memory.test.js",
     "eval": "node eval/run.js",
     "ci": "npm test && npm run build:verify",
     "eval:model": "node eval/run.js --embedder=minilm",

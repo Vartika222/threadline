@@ -7,6 +7,21 @@ Most tabs pile up in the order you opened them. Threadline moves each one into a
 named, coloured Chrome tab group for its category, with no clicking, and keeps
 related tabs next to each other inside the group.
 
+It also **remembers for you**, on your computer only. Open **Memory** from the popup:
+
+- **Stash**: press **Alt+Shift+S** on any page to save it, or highlight text first to
+  save a quote. Right-click an image or a selection for the same. No folders: every
+  item is tagged with a category and its meaning automatically.
+- **Search by meaning**, across everything you stashed and every page you visited,
+  including tabs you closed. "that article about squirrels forgetting" finds it
+  even if those words were never in the title.
+- **Resurfacing**: open a page related to something you stashed over an hour ago and
+  a small note appears in the corner: "You stashed 3 things about this in March".
+- **Trails**: each session split into the threads you were following, with time
+  spent, page count and where you ended. One click reopens a trail as a tab group.
+- **Projects**: topics you came back to on two or more days, gathered from your
+  history by themselves.
+
 **Status:** working prototype, loaded unpacked in Chrome. Not published on the
 Chrome Web Store.
 
@@ -111,6 +126,13 @@ Chrome Web Store.
   so sorting can happen with the popup closed, and `alarms` runs the focus timer.
 - Dwell time, revisit and tab-switch counts are still recorded locally, but
   nothing uses them for sorting. Recency only fades idle tabs in the popup.
+- **Memory** (pages you visit, their text up to 1,000 characters, when you switched
+  to them, and what you stash) is kept in IndexedDB in this browser profile.
+  Incognito tabs are never recorded. You can pause it, exclude a site ("Never
+  remember this site", which also deletes what it had), or erase everything from
+  the memory page. Pages not seen for 90 days are forgotten; stashed items stay until
+  you delete them. Stashed images are kept as a link, so one removed from its site
+  stops showing. `contextMenus` adds the right-click Stash items.
 
 ## Install and run
 
@@ -237,11 +259,13 @@ the Model page shows the real numbers against your own Gemini Nano answers.
 
 ```
 background.js        MV3 service worker: tab lifecycle, serialised storage writes, messages
-content_script.js    Page text extraction + dwell tracking (shipped as-is, no imports)
+content_script.js    Page text extraction, dwell tracking, the corner note (shipped as-is, no imports)
 src/ml/              categories, embedder, graph (chain), nano (Gemini Nano),
                      student (the fast model), personalise, feedback,
                      implicitFeedback, recency, pipeline
-src/offscreen/       Hidden page that classifies tabs for the service worker
+src/offscreen/       Hidden page that classifies tabs and indexes memory for the service worker
+src/memory/          Memory: db.js (IndexedDB), memory.js (search, trails, projects,
+                     resurfacing), MemoryApp.jsx (memory.html)
 blocked.html/.js     The page strict focus shows
 public/model/        The language model, bundled (see THIRD_PARTY_NOTICES.md)
 training/            Scripts to fine-tune the language model and train a category network

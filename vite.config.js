@@ -54,6 +54,8 @@ export default defineConfig(({ mode }) => ({
         // Hidden page that classifies tabs for the service worker
         offscreen: resolve(__dirname, 'offscreen.html'),
 
+        memory: resolve(__dirname, 'memory.html'),
+
         // Background service worker: compiled to dist/background.js
         // Must be a flat file — no dynamic chunk splitting
         background: resolve(__dirname, 'background.js'),

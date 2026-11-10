@@ -29,6 +29,8 @@
  */
 import { CATEGORY_NAMES, correctionKey } from './src/ml/categories.js';
 import { mergeExamples, countSources, RETRAIN_EVERY } from './src/ml/student.js';
+import { put, update, forgetBefore } from './src/memory/db.js';
+import { dayOf, DAY_MS } from './src/memory/memory.js';
 
 // ─── State Management ─────────────────────────────────────────────────────
 
@@ -251,12 +253,14 @@ async function injectContentScriptIntoOpenTabs() {
 }
 
 chrome.runtime.onInstalled?.addListener(async () => {
+  setUpMemory();
   await syncStoreWithOpenTabs();
   await injectContentScriptIntoOpenTabs();
   scheduleAutoSort();
 });
 
 chrome.runtime.onStartup?.addListener(async () => {
+  forgetOldMemory();
   await syncStoreWithOpenTabs();
   scheduleAutoSort();
 });
@@ -322,6 +326,7 @@ chrome.tabs.onActivated.addListener(async ({ tabId }) => {
     }
   });
 
+  if (knownTab) recordVisit(knownTab);
   await showTabCategoryOnBadge(tabId);
   await enforceFocus(tabId);
 });
@@ -351,6 +356,7 @@ function forgetPageTextOnNavigation(tabId, newUrl) {
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   if (changeInfo.groupId !== undefined) await learnFromMove(tabId, changeInfo.groupId);
   if (changeInfo.url) await forgetPageTextOnNavigation(tabId, changeInfo.url);
+  if (changeInfo.url && tab.active) recordVisit({ ...tab, url: changeInfo.url });
   if (changeInfo.status !== 'complete') return;
 
   await updateTabStore((store) => {
@@ -560,6 +566,7 @@ async function runAutoSort() {
     for (let i = 0; i < tabs.length; i++) {
       // A tab put in place by a snapshot keeps its spot until it navigates away.
       const manual = placements[tabs[i].id]?.manual && placements[tabs[i].id].url === withoutHash(tabs[i].url);
+      rememberCategory(tabs[i].url, results[i]);
       updates[tabs[i].id] = { url: withoutHash(tabs[i].url), basis: sortBasis(store, tabs[i]), ...results[i], ...(manual && { manual }) };
       if (!manual) await placeTabInGroup(tabs[i], results[i], managed, { ...placements, ...updates });
     }
@@ -1148,6 +1155,191 @@ async function restoreSnapshot(id) {
   return { ok: true, restored: restored.length, reopened, skipped };
 }
 
+// ─── Memory ───────────────────────────────────────────────────────────────
+//
+// Threadline remembers the pages you visit (their text, category and meaning)
+// and what you stash, in IndexedDB on this computer (src/memory/db.js). The
+// memory page searches it and finds trails and projects in it. Nothing is
+// recorded for incognito tabs, while memory is paused, or on sites you excluded,
+// and pages not seen for 90 days are forgotten. Stash items stay until deleted.
+
+const MEMORY_PAUSED_KEY = 'memory_paused';
+const MEMORY_EXCLUDED_KEY = 'memory_excluded';   // [host]
+const RESURFACED_KEY = 'memory_resurfaced';      // url → the day its note was shown
+const MEMORY_DAYS = 90;
+const INDEX_DELAY_MS = 3000;
+let lastVisitUrl = null;
+let indexTimer = null;
+
+const fail = (what) => (err) => console.warn(`[Threadline] ${what}:`, err.message);
+
+async function memoryAllows(tab) {
+  if (!tab || tab.incognito || !/^https?:/.test(tab.url || '')) return false;
+  const got = await chrome.storage.local.get([MEMORY_PAUSED_KEY, MEMORY_EXCLUDED_KEY]);
+  return got[MEMORY_PAUSED_KEY] !== true && !(got[MEMORY_EXCLUDED_KEY] || []).includes(safeHostname(tab.url));
+}
+
+/** A page's record, created on its first visit, with today added to the days it was seen. */
+function touchPage(record, tab, now) {
+  const url = withoutHash(tab.url);
+  const page = record || { url, firstSeen: now, days: [], needsVector: true };
+  const today = dayOf(now);
+  return {
+    ...page,
+    title: tab.title || page.title || '',
+    host: safeHostname(url),
+    favIconUrl: tab.favIconUrl || page.favIconUrl || '',
+    lastSeen: now,
+    days: page.days.includes(today) ? page.days : [...page.days, today].slice(-60),
+  };
+}
+
+/** Records that you're looking at a tab now. */
+function recordVisit(tab) {
+  (async () => {
+    if (!(await memoryAllows(tab))) return;
+    const url = withoutHash(tab.url);
+    if (url === lastVisitUrl) return; // the same page reported twice (navigation, then activation)
+    lastVisitUrl = url;
+    const now = Date.now();
+    await put('visits', { url, title: tab.title || '', at: now });
+    await update('pages', url, (page) => touchPage(page, tab, now));
+    scheduleIndex();
+  })().catch(fail('Could not record a visit'));
+}
+
+function recordAway() {
+  lastVisitUrl = null;
+  put('visits', { away: true, at: Date.now() }).catch(fail('Could not record time away'));
+}
+
+chrome.windows?.onFocusChanged?.addListener(async (windowId) => {
+  if (windowId === chrome.windows.WINDOW_ID_NONE) return recordAway();
+  const [active] = await chrome.tabs.query({ active: true, windowId });
+  if (active) recordVisit(active);
+});
+
+/** Stores the page text the content script sent, to be embedded. */
+function rememberPageText(tab, payload) {
+  (async () => {
+    if (!(await memoryAllows(tab))) return;
+    const text = (payload.description || payload.content || '').slice(0, 1000);
+    await update('pages', withoutHash(tab.url), (page) => {
+      const next = touchPage(page, { ...tab, title: payload.title || tab.title }, page?.lastSeen || Date.now());
+      return next.text === text && page ? null : { ...next, text, needsVector: true };
+    });
+    scheduleIndex();
+  })().catch(fail('Could not remember a page'));
+}
+
+/** Gives a remembered page the category its tab was sorted into. */
+function rememberCategory(url, { category, subcategory }) {
+  update('pages', withoutHash(url), (page) => (page && page.category !== category
+    ? { ...page, category, subcategory } : null)).catch(fail('Could not save a category'));
+}
+
+/** Saves a page, a highlighted quote or an image to the stash. Works while memory is paused: you asked. */
+async function stashFromTab(tab, { quote = '', imageUrl = '' }) {
+  if (!tab || tab.incognito || !/^https?:/.test(tab.url || '')) return { error: "This page can't be stashed" };
+  const store = await loadTabStore();
+  const saved = savedDetails(store, tab);
+  const placement = (await loadPlacements())[tab.id];
+  const now = Date.now();
+  const item = {
+    id: `${now}-${Math.random().toString(36).slice(2, 8)}`,
+    kind: imageUrl ? 'image' : quote ? 'quote' : 'page',
+    url: withoutHash(tab.url),
+    title: tab.title || '',
+    host: safeHostname(tab.url),
+    favIconUrl: tab.favIconUrl || '',
+    text: (saved.description || saved.content || '').slice(0, 1000),
+    quote: quote.trim().slice(0, 2000),
+    imageUrl,
+    category: placement?.category || null,
+    subcategory: placement?.subcategory || null,
+    savedAt: now,
+    needsVector: true,
+  };
+  await put('stash', item);
+  scheduleIndex(0);
+  const what = { image: 'Image stashed', quote: 'Quote stashed', page: 'Page stashed' }[item.kind];
+  chrome.tabs.sendMessage(tab.id, { type: 'TOAST', text: what }).catch(() => {});
+  return { ok: true, item: { id: item.id, kind: item.kind } };
+}
+
+/** The keyboard shortcut stashes what you highlighted, or else the page. */
+async function stashActiveTab() {
+  const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  if (!tab) return;
+  let quote = '';
+  try {
+    const [{ result }] = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: () => String(getSelection() || '') });
+    quote = result || '';
+  } catch {
+    // a page scripts can't run on: stash the page
+  }
+  await stashFromTab(tab, { quote });
+}
+
+chrome.commands?.onCommand?.addListener((command) => {
+  if (command === 'stash') stashActiveTab().catch(fail('Could not stash'));
+});
+
+chrome.contextMenus?.onClicked?.addListener((info, tab) => {
+  const options = { 'stash-quote': { quote: info.selectionText || '' }, 'stash-image': { imageUrl: info.srcUrl || '' } }[info.menuItemId] || {};
+  if (String(info.menuItemId).startsWith('stash-')) stashFromTab(tab, options).catch(fail('Could not stash'));
+});
+
+function setUpMemory() {
+  chrome.contextMenus?.removeAll(() => {
+    chrome.contextMenus.create({ id: 'stash-page', title: 'Stash this page', contexts: ['page'] });
+    chrome.contextMenus.create({ id: 'stash-quote', title: 'Stash this quote', contexts: ['selection'] });
+    chrome.contextMenus.create({ id: 'stash-image', title: 'Stash this image', contexts: ['image'] });
+  });
+  forgetOldMemory();
+}
+
+function forgetOldMemory() {
+  forgetBefore(Date.now() - MEMORY_DAYS * DAY_MS).catch(fail('Could not forget old pages'));
+}
+
+/** Asks the classifier page to embed new pages and stash items, a few seconds after the last change. */
+function scheduleIndex(delay = INDEX_DELAY_MS) {
+  clearTimeout(indexTimer);
+  indexTimer = setTimeout(() => indexMemory().catch(fail('Could not index memory')), delay);
+  indexTimer.unref?.();
+}
+
+async function indexMemory() {
+  if (!globalThis.indexedDB) return;
+  await ensureClassifierPage();
+  const response = await chrome.runtime.sendMessage({ type: 'INDEX_MEMORY', corrections: await loadCorrections() });
+  if (response?.error) throw new Error(response.error);
+  if (response?.more) scheduleIndex(0);
+  for (const note of response?.resurface || []) await showResurfacing(note);
+}
+
+/** "You stashed 3 things about this": once a day per page, on the tabs showing it. */
+async function showResurfacing({ url, count, since }) {
+  const today = dayOf(Date.now());
+  const { [RESURFACED_KEY]: shown = {} } = await chrome.storage.local.get(RESURFACED_KEY);
+  if (shown[url] === today) return;
+  const tabs = (await chrome.tabs.query({})).filter(tab => withoutHash(tab.url) === url);
+  if (!tabs.length) return;
+  shown[url] = today;
+  for (const key of Object.keys(shown)) if (shown[key] !== today) delete shown[key];
+  await chrome.storage.local.set({ [RESURFACED_KEY]: shown });
+  const month = new Date(since).toLocaleString(undefined, { month: 'long' });
+  const text = `You stashed ${count === 1 ? 'something' : `${count} things`} about this in ${month}`;
+  for (const tab of tabs) chrome.tabs.sendMessage(tab.id, { type: 'TOAST', text, related: url }).catch(() => {});
+}
+
+async function openMemoryPage(related) {
+  const hash = related ? `#related=${encodeURIComponent(related)}` : '';
+  await chrome.tabs.create({ url: chrome.runtime.getURL(`memory.html${hash}`) });
+  return { ok: true };
+}
+
 // Reachable from the service worker console as well as the popup.
 globalThis.threadline = {
   startFocus,
@@ -1159,6 +1351,8 @@ globalThis.threadline = {
   saveSnapshot,
   restoreSnapshot,
   correctTab,
+  stashFromTab,
+  indexMemory,
 };
 
 // ─── Message Handlers (from popup and content scripts) ────────────────────
@@ -1217,6 +1411,7 @@ async function handleMessage(message, sender) {
           }
         });
         scheduleAutoSort();
+        rememberPageText(sender.tab, message.payload);
       }
       return { ok: true };
     }
@@ -1315,6 +1510,12 @@ async function handleMessage(message, sender) {
       const { [NANO_STATUS_KEY]: status } = await chrome.storage.session.get(NANO_STATUS_KEY);
       return { enabled: await isNanoOn(), backgroundStatus: status || null };
     }
+
+    case 'STASH_PAGE':
+      return stashFromTab(await chrome.tabs.get(message.tabId), {});
+
+    case 'OPEN_MEMORY':
+      return openMemoryPage(message.related);
 
     case 'STUDENT_EXAMPLES':
       return addStudentExamples(message.examples);
