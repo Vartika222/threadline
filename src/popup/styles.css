@@ -612,3 +612,10 @@ body {
 .compare-answers .chip { font-size: 10px; padding: 3px 7px; border-radius: var(--radius-sm); text-align: left; }
 
 .tab-item .tab-title { flex: 1; min-width: 0; }
+
+/* Fast model (Model page) */
+.student-card { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; }
+.student-card .snapshot-name { white-space: normal; font-weight: 500; line-height: 1.4; }
+.student-speed { display: flex; flex-direction: column; gap: 2px; font-size: 11px; color: var(--text-secondary); }
+.student-speed span { display: inline-block; width: 82px; color: var(--text-muted); }
+.student-speed strong { color: var(--text-primary); }

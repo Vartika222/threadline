@@ -2,12 +2,14 @@
  * THREADLINE — ModelPanel.jsx
  *
  * Gemini Nano: its status, the one-time download, switching it on, and a
- * side-by-side test against the current model on your open tabs. Also the
- * corrections Threadline has remembered.
+ * side-by-side test against the current model on your open tabs. The fast
+ * model that learns from Gemini Nano (student.js): how far it has got and how
+ * fast it is. Also the corrections Threadline has remembered.
  */
 import React, { useEffect, useState } from 'react';
 import { classifyTabs } from '../ml/categories.js';
 import { nanoStatus, startNano, classifyWithNano } from '../ml/nano.js';
+import { TRUST_MIN_TESTED, TRUST_MIN_ACCURACY } from '../ml/student.js';
 
 const embed = async (texts) => (await import('../ml/embedder.js')).embedTexts(texts);
 
@@ -21,6 +23,22 @@ const STATUS_TEXT = {
 };
 
 const label = (r) => (r ? `${r.category} › ${r.subcategory}` : '—');
+const ms = (n) => `${Math.round(n).toLocaleString()} ms`;
+const percent = (x) => `${Math.round(x * 100)}%`;
+
+/** One sentence on where the fast model has got to. */
+function studentProgress(summary) {
+  const { model, examples } = summary;
+  if (!model) return `It has ${examples} example${examples === 1 ? '' : 's'} so far and trains after every 3 new ones.`;
+  const { evaluation: e } = model;
+  if (model.trusted) {
+    return `It answers by itself when it's sure. On ${e.sure} pages it never trained on and was sure about, it agreed with Gemini Nano ${percent(e.sureAccuracy)} of the time.`;
+  }
+  if (!e.sure) {
+    return `Still learning: it hasn't yet been tested on enough Gemini Nano answers it didn't train on (it needs ${TRUST_MIN_TESTED}).`;
+  }
+  return `Still learning: on pages it never trained on, it agreed with Gemini Nano on ${Math.round(e.sureAccuracy * e.sure)} of the ${e.sure} it was sure about. It takes over at ${percent(TRUST_MIN_ACCURACY)} on at least ${TRUST_MIN_TESTED}.`;
+}
 
 export default function ModelPanel() {
   const [status, setStatus] = useState('checking');
@@ -33,13 +51,31 @@ export default function ModelPanel() {
   const [votes, setVotes] = useState({});
   const [error, setError] = useState(null);
   const [copied, setCopied] = useState(false);
+  const [studentInfo, setStudentInfo] = useState(null);
+  const [training, setTraining] = useState(false);
 
   async function refresh() {
-    setStatus(await nanoStatus());
+    // Chrome can take a few seconds to answer about Gemini Nano; don't hold the rest up.
+    nanoStatus().then(setStatus);
     const state = await chrome.runtime.sendMessage({ type: 'GET_NANO' });
     setEnabled(state.enabled);
     setBackgroundStatus(state.backgroundStatus);
     setCorrections((await chrome.runtime.sendMessage({ type: 'GET_CORRECTIONS' })).corrections || {});
+    setStudentInfo(await chrome.runtime.sendMessage({ type: 'GET_STUDENT' }));
+  }
+
+  async function handleRetrain() {
+    setError(null);
+    setTraining(true);
+    const result = await chrome.runtime.sendMessage({ type: 'RETRAIN_STUDENT' });
+    if (result?.error) setError(`Couldn't train the fast model: ${result.error}`);
+    setTraining(false);
+    refresh();
+  }
+
+  async function handleForgetStudent() {
+    await chrome.runtime.sendMessage({ type: 'FORGET_STUDENT' });
+    refresh();
   }
 
   useEffect(() => { refresh(); }, []);
@@ -202,6 +238,43 @@ export default function ModelPanel() {
           </div>
           <button className="cancel-btn wide" onClick={handleCopy}>{copied ? 'Copied ✓' : 'Copy results'}</button>
         </div>
+      )}
+
+      {studentInfo && (
+        <>
+          <div className="panel-title" style={{ marginTop: 8 }}>Fast model (trained on this computer)</div>
+          <div className="panel-hint">
+            A small model that learns from Gemini Nano's answers, the site list and your corrections. Once it
+            agrees with Gemini Nano on pages it never trained on, it sorts the tabs it's sure about in
+            milliseconds, and Gemini Nano is only asked about the rest.
+          </div>
+          <div className="student-card">
+            <div className="snapshot-name">{studentProgress(studentInfo)}</div>
+            <div className="snapshot-meta">
+              Learned from {studentInfo.counts.nano} Gemini Nano answers, {studentInfo.counts.correction} of your
+              corrections and {studentInfo.counts.rules} sites on the list.
+              {studentInfo.model && ` Last trained ${new Date(studentInfo.model.trainedAt).toLocaleString()}, in ${ms(studentInfo.model.trainingMs)}.`}
+            </div>
+            {(studentInfo.speed.nanoTabs > 0 || studentInfo.speed.studentTabs > 0) && (
+              <div className="student-speed">
+                {studentInfo.speed.nanoTabs > 0 && (
+                  <div><span>Gemini Nano</span><strong>{ms(studentInfo.speed.nanoMs / studentInfo.speed.nanoTabs)}</strong> per tab · {studentInfo.speed.nanoTabs} tabs</div>
+                )}
+                {studentInfo.speed.embedded > 0 && (
+                  <div><span>Fast model</span><strong>{ms(studentInfo.speed.embedMs / studentInfo.speed.embedded)}</strong> per tab · {studentInfo.speed.studentTabs} tabs</div>
+                )}
+              </div>
+            )}
+          </div>
+          <div className="compare-answers">
+            <button className="cancel-btn" onClick={handleRetrain} disabled={training || studentInfo.examples === 0}>
+              {training ? 'Training…' : 'Retrain now'}
+            </button>
+            <button className="small-btn danger" onClick={handleForgetStudent} disabled={studentInfo.examples === 0}>
+              Forget what it learned
+            </button>
+          </div>
+        </>
       )}
 
       <div className="panel-title" style={{ marginTop: 8 }}>Remembered corrections</div>

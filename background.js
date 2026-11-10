@@ -488,6 +488,7 @@ async function classifyInBackground(tabs) {
     type: 'CLASSIFY_TABS',
     corrections: await loadCorrections(),
     useNano: await isNanoOn(),
+    student: await loadStudent(),
     tabs: tabs.map(tab => {
       const saved = savedDetails(store, tab);
       return {
@@ -502,6 +503,7 @@ async function classifyInBackground(tabs) {
   });
   if (response?.error) throw new Error(response.error);
   if (response.nano) await chrome.storage.session.set({ [NANO_STATUS_KEY]: response.nano });
+  await recordSortTiming(response.timing);
   return response;
 }
 
@@ -923,6 +925,117 @@ async function learnFromMove(tabId, groupId) {
   await correctTab(tabId, group.title);
 }
 
+// ─── The trained student ──────────────────────────────────────────────────
+//
+// A small classifier (src/ml/student.js) that learns from Gemini Nano's
+// answers, the site list and your corrections, and takes over from Gemini Nano
+// on tabs it's sure about once it passes a test on examples it didn't train
+// on. The classifier page does the maths; this file stores the examples and
+// the model, since that page can't use chrome.storage.
+
+const STUDENT_EXAMPLES_KEY = 'student_examples';   // [{ key, vector, label, source, at }]
+const STUDENT_MODEL_KEY = 'student_model';         // what buildStudent returns
+const STUDENT_NEW_KEY = 'student_new_examples';    // examples since the last training
+const STUDENT_SPEED_KEY = 'student_speed';         // running totals for the Model page
+const STUDENT_MAX_EXAMPLES = 400;                  // same as MAX_EXAMPLES in student.js
+const STUDENT_RETRAIN_EVERY = 3;                   // same as RETRAIN_EVERY in student.js
+const STUDENT_SOURCES = new Set(['nano', 'rules', 'correction']);
+let studentTraining = null;
+
+async function loadStudent() {
+  const { [STUDENT_MODEL_KEY]: model } = await chrome.storage.local.get(STUDENT_MODEL_KEY);
+  return model || null;
+}
+
+/**
+ * Same as mergeExamples in src/ml/student.js, which this file can't import: a
+ * page seen again replaces its old example (but a guess never replaces your
+ * correction), and only the newest examples are kept. A test checks they agree.
+ */
+function mergeStudentExamples(stored, incoming, max = STUDENT_MAX_EXAMPLES) {
+  const byKey = new Map(stored.map(e => [e.key, e]));
+  for (const example of incoming) {
+    if (!example?.key || !STUDENT_SOURCES.has(example.source) || !Array.isArray(example.vector)) continue;
+    const old = byKey.get(example.key);
+    if (old && old.source === 'correction' && example.source !== 'correction') continue;
+    byKey.delete(example.key);
+    byKey.set(example.key, example);
+  }
+  return [...byKey.values()].sort((a, b) => (a.at || 0) - (b.at || 0)).slice(-max);
+}
+
+async function addStudentExamples(incoming) {
+  let shouldTrain = false;
+  await withStoreLock(async () => {
+    const got = await chrome.storage.local.get([STUDENT_EXAMPLES_KEY, STUDENT_NEW_KEY]);
+    const examples = mergeStudentExamples(got[STUDENT_EXAMPLES_KEY] || [], incoming || []);
+    const fresh = (got[STUDENT_NEW_KEY] || 0) + (incoming || []).length;
+    await chrome.storage.local.set({ [STUDENT_EXAMPLES_KEY]: examples, [STUDENT_NEW_KEY]: fresh });
+    shouldTrain = fresh >= STUDENT_RETRAIN_EVERY;
+  });
+  if (shouldTrain) trainStudent().catch(err => console.warn('[Threadline] Training the student failed:', err.message));
+  return { ok: true };
+}
+
+/** Retrains the student on every stored example. One training at a time. */
+async function trainStudent() {
+  if (studentTraining) return studentTraining;
+  studentTraining = (async () => {
+    const { [STUDENT_EXAMPLES_KEY]: examples = [] } = await chrome.storage.local.get(STUDENT_EXAMPLES_KEY);
+    if (!examples.length) return { error: 'Nothing to learn from yet' };
+    await ensureClassifierPage();
+    const response = await chrome.runtime.sendMessage({ type: 'TRAIN_STUDENT', examples });
+    if (!response || response.error) return { error: response?.error || 'No answer from the classifier page' };
+    await chrome.storage.local.set({ [STUDENT_MODEL_KEY]: response.student, [STUDENT_NEW_KEY]: 0 });
+    return { ok: true };
+  })();
+  try {
+    return await studentTraining;
+  } finally {
+    studentTraining = null;
+  }
+}
+
+/** Adds one sort's timings to the running totals. */
+async function recordSortTiming(timing) {
+  if (!timing) return;
+  const { [STUDENT_SPEED_KEY]: speed = {} } = await chrome.storage.local.get(STUDENT_SPEED_KEY);
+  const add = (name, value) => { speed[name] = (speed[name] || 0) + (value || 0); };
+  add('nanoTabs', timing.nanoTabs);
+  add('nanoMs', timing.nanoMs);
+  add('studentTabs', timing.studentTabs);
+  add('embedMs', timing.embedMs);
+  add('embedded', timing.embedded);
+  await chrome.storage.local.set({ [STUDENT_SPEED_KEY]: speed });
+}
+
+/** What the Model page shows: the student without its weights. */
+async function studentSummary() {
+  const got = await chrome.storage.local.get([STUDENT_MODEL_KEY, STUDENT_EXAMPLES_KEY, STUDENT_NEW_KEY, STUDENT_SPEED_KEY]);
+  const model = got[STUDENT_MODEL_KEY];
+  const examples = got[STUDENT_EXAMPLES_KEY] || [];
+  const counts = { nano: 0, correction: 0, rules: 0 };
+  for (const e of examples) counts[e.source] = (counts[e.source] || 0) + 1;
+  return {
+    examples: examples.length,
+    counts,
+    newSinceTraining: got[STUDENT_NEW_KEY] || 0,
+    model: model ? {
+      evaluation: model.evaluation,
+      trusted: model.trusted,
+      counts: model.counts,
+      trainedAt: model.trainedAt,
+      trainingMs: model.trainingMs,
+    } : null,
+    speed: got[STUDENT_SPEED_KEY] || {},
+  };
+}
+
+async function forgetStudent() {
+  await chrome.storage.local.remove([STUDENT_EXAMPLES_KEY, STUDENT_MODEL_KEY, STUDENT_NEW_KEY, STUDENT_SPEED_KEY]);
+  return { ok: true };
+}
+
 // ─── Snapshots ────────────────────────────────────────────────────────────
 //
 // A snapshot keeps a window's tabs in their order, with their groups, so an
@@ -1050,6 +1163,7 @@ globalThis.threadline = {
   restoreSnapshot,
   correctTab,
   correctionKey,
+  mergeStudentExamples,
 };
 
 // ─── Message Handlers (from popup and content scripts) ────────────────────
@@ -1206,6 +1320,18 @@ async function handleMessage(message, sender) {
       const { [NANO_STATUS_KEY]: status } = await chrome.storage.session.get(NANO_STATUS_KEY);
       return { enabled: await isNanoOn(), backgroundStatus: status || null };
     }
+
+    case 'STUDENT_EXAMPLES':
+      return addStudentExamples(message.examples);
+
+    case 'GET_STUDENT':
+      return studentSummary();
+
+    case 'RETRAIN_STUDENT':
+      return trainStudent();
+
+    case 'FORGET_STUDENT':
+      return forgetStudent();
 
     case 'SAVE_SNAPSHOT':
       return saveSnapshot(message.name);

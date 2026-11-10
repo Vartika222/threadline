@@ -199,6 +199,28 @@ descriptions, because dmoz has no social or streaming labels (`training/README.m
   switched on and `available`. It answers only with a `Category › Subcategory` label
   (`responseConstraint` enum), one tab per cloned session; anything it can't answer
   goes to the embedding model. Status checks give up after 3 s, prompts after 20 s.
+- **The fast model** (`src/ml/student.js`) is passed to `classifyTabs` as `student`,
+  and asked before Gemini Nano. It answers only tabs it gives a probability of at
+  least 0.6 (`CONFIDENCE`), and only once its last test passed (`trusted`). It's
+  softmax regression on the tab's embedding, trained by full-batch gradient descent
+  with momentum and L2, from zero weights, so the same examples give the same model.
+  The flow:
+  1. `runAutoSort` sends the stored model with `CLASSIFY_TABS`.
+  2. The offscreen page answers, then embeds the tabs answered by Gemini Nano, the
+     site list or a correction and sends them back as `STUDENT_EXAMPLES`. Answers
+     from the student or the description model are never learned from.
+  3. background.js merges them (`mergeStudentExamples`, a copy of `mergeExamples`; a
+     test checks they agree): newest 400, one per page, and a guess never replaces
+     your correction.
+  4. After 3 new examples it sends `TRAIN_STUDENT`. `buildStudent` trains on the
+     pages not held back (`isHeldOut`, a hash, about 1 in 5), tests on the held-back
+     Gemini Nano examples, then trains on everything. Category descriptions are
+     always included, at weight 1; corrections weigh 3, Gemini Nano 1, the site
+     list 0.5.
+  5. `trusted` needs at least 6 held-back pages it was sure about, with 85% agreeing.
+
+  The popup reads a summary with `GET_STUDENT` (no weights) and can send
+  `RETRAIN_STUDENT` and `FORGET_STUDENT`.
 - **Snapshots** (`saveSnapshot`, `restoreSnapshot`) keep a window's tabs in order with
   their groups. Restoring matches saved tabs to open ones by address, reopens the rest,
   regroups them, and marks their placements `manual: true`: `runAutoSort` still learns
@@ -379,6 +401,8 @@ and the `chrome.tabs` event hooks, plus the small runner the newer files use.
 | `recency.test.js` | Recency bounds (1 at t=0, 0 at/past the cap, ~0.5 halfway), idle-duration formatting |
 | `background.test.js` | 20 concurrent tab events lose no data (storage write queue), bad URLs don't throw, transitions and implicit candidates are counted, previous-active tab survives a worker restart, tabs already open at install are registered, pruned and given the content script, navigating forgets the old page's text, Apply Order handles pinned and closed tabs |
 | `contentScript.test.js` | Runs the real `content_script.js` on a fake page and clock: dwell time counts once in any order of blur, focus and visibility events; CSS and scripts stay out of the extracted text |
+| `nano.test.js` | Gemini Nano against a fake Prompt API: status, labels limited to ours, one cloned session per tab, time limits |
+| `student.test.js` | The fast model: learns and generalises on made-up embeddings, is deterministic, trains 400 examples in under 8 s, stores rounded without changing answers, merges examples (corrections kept), held-back split, trust rules, answers only tabs it's sure about with Gemini Nano getting the rest, and background.js storing examples, retraining, sending the model with each sort, and forgetting |
 | `eval.test.js` | The evaluation metrics (neighbour agreement, runs per topic, adjusted Rand index) against hand-computed values |
 
 `npm run build:verify` additionally checks that the production bundle compiles
