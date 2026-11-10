@@ -362,10 +362,15 @@ export function isValidAnswer(answer) {
  * @param {(tabs:object[]) => Promise<Array<{category,subcategory}|null>>} [options.askModel]
  *        another model to ask first (Gemini Nano). Any answer it can't give, or
  *        gives wrongly, goes to the embedding model instead.
+ * @param {{predict:(vector:number[]) => {category,subcategory,confidence}|null, confidence:number}} [options.student]
+ *        the trained student (student.js), asked before askModel. It answers
+ *        only the tabs it gives at least `confidence` to.
+ * @param {boolean} [options.withText] - also return each tab's text and, when
+ *        it was worked out, its embedding (for training the student)
  * @returns {Promise<Array<{category:string, subcategory:string, source:string}>>}
- *        one per tab; source is correction, rules, nano or model
+ *        one per tab; source is correction, rules, student, nano or model
  */
-export async function classifyTabs(tabs, embed, { useRules = true, corrections = {}, askModel = null } = {}) {
+export async function classifyTabs(tabs, embed, { useRules = true, corrections = {}, askModel = null, student = null, withText = false } = {}) {
   const decisions = tabs.map((tab) => {
     if (!useRules) return { useModel: true };
     const key = correctionKey(tab);
@@ -384,6 +389,25 @@ export async function classifyTabs(tabs, embed, { useRules = true, corrections =
     decisions[tabIndex] = result;
   };
 
+  // Each tab's text, and its embedding once worked out, so no tab is embedded twice.
+  const texts = decisions.map((d, i) => d.text || classificationText(tabs[i]));
+  const vectors = new Array(tabs.length).fill(null);
+  const embedTabs = async (indexes) => {
+    const missing = indexes.filter(i => !vectors[i]);
+    if (missing.length) (await embed(missing.map(i => texts[i]))).forEach((v, n) => { vectors[missing[n]] = v; });
+    return indexes.map(i => vectors[i]);
+  };
+
+  // The trained student answers the tabs it's sure about, in milliseconds.
+  if (student && decisions.some(d => d.useModel && !d.onlyCategory)) {
+    const unsure = decisions.flatMap((d, i) => (d.useModel && !d.onlyCategory ? [i] : []));
+    const studentVectors = await embedTabs(unsure);
+    unsure.forEach((tabIndex, n) => {
+      const answer = student.predict(studentVectors[n]);
+      if (answer && answer.confidence >= student.confidence && isValidAnswer(answer)) settle(tabIndex, answer, 'student');
+    });
+  }
+
   const askable = decisions.flatMap((d, i) => (d.useModel && !d.onlyCategory ? [i] : []));
   if (askModel && askable.length > 0) {
     let answers = [];
@@ -400,19 +424,27 @@ export async function classifyTabs(tabs, embed, { useRules = true, corrections =
   const needModel = decisions.flatMap((d, i) => (d.useModel ? [i] : []));
   if (needModel.length > 0) {
     const descriptions = await loadDescriptionVectors(embed);
-    const vectors = await embed(needModel.map(i => decisions[i].text || classificationText(tabs[i])));
+    const modelVectors = await embedTabs(needModel);
     needModel.forEach((tabIndex, n) => {
       const { onlyCategory, defaultTo } = decisions[tabIndex];
       if (onlyCategory) {
-        const closest = closestDescription(vectors[n], descriptions.filter(d => d.category === onlyCategory));
+        const closest = closestDescription(modelVectors[n], descriptions.filter(d => d.category === onlyCategory));
         decisions[tabIndex] = { category: closest.category, subcategory: closest.subcategory, source: 'correction' };
         return;
       }
-      const closest = closestDescription(vectors[n], descriptions);
+      const closest = closestDescription(modelVectors[n], descriptions);
       settle(tabIndex, closest.score >= MIN_CONFIDENCE ? closest : (defaultTo || FALLBACK), 'model');
     });
   }
+  if (withText) return decisions.map(({ category, subcategory, source }, i) => ({ category, subcategory, source, text: texts[i], vector: vectors[i] }));
   return decisions.map(({ category, subcategory, source }) => ({ category, subcategory, source }));
+}
+
+/** Every category description, embedded, for training the student. */
+export async function descriptionExamples(embed) {
+  return (await loadDescriptionVectors(embed))
+    .filter(d => d.subcategory !== 'Unsure')
+    .map(d => ({ key: `description:${d.text}`, vector: d.vector, label: `${d.category} › ${d.subcategory}`, source: 'description' }));
 }
 
 /** Everything the service worker needs to place a tab in the tab strip. */

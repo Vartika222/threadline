@@ -121,6 +121,12 @@ chrome.storage.local.get('implicit_training_candidates', d => console.log(d))
   close one, then click **Restore**: the order and groups come back and the closed tab
   reopens. Wait a few seconds: automatic sorting should not move them. **Undo**
   reverses the restore.
+- **Fast model:** with Gemini Nano switched on, browse normally for a while. On the
+  **Model** page, the fast model's count of Gemini Nano answers goes up. Once it
+  says "It answers by itself when it's sure", open a page that isn't on the site list:
+  it should be sorted with no wait, and the "Fast model" row should show a few
+  milliseconds per tab next to Gemini Nano's seconds. **Forget what it learned**
+  starts it over.
 - **Service worker restart:** on `chrome://extensions` click the card's reload
   icon, switch between two tabs, and confirm nothing errors.
 - **Reset everything:** in the service worker console, run
@@ -135,7 +141,8 @@ npm run eval:model
 This runs the bundled model in Node, scores Threadline's chain against MST,
 greedy and random orderings on 48 labelled tabs, and writes the table to
 `eval/results-minilm.md`. Compare it with the table in the README's "Evaluation"
-section. `npm run eval:categories` does the same for category accuracy.
+section. `npm run eval:categories` does the same for category accuracy, and
+`npm run eval:student` tests the fast model on sites it never trained on.
 
 ## What to send back if something fails
 

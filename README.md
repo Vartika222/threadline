@@ -72,7 +72,16 @@ Chrome Web Store.
    current model on my tabs** shows both answers side by side so you can mark which is
    right and copy the results. If Gemini Nano isn't there, is slow (over 20 s), or gives
    an answer outside the categories, the current model answers instead.
-9. **Personalise (optional, off by default).** Tick **Personalise sorting
+9. **Fast model, trained on this computer.** Gemini Nano takes about 3.5 seconds a
+   tab. A small classifier (softmax regression on the MiniLM embedding, about 12,700
+   weights) learns from Gemini Nano's answers, your corrections and the site list.
+   This is called distillation. Every few new examples it retrains (a fraction of a
+   second) and tests itself on pages it held back from training. Once it agrees with
+   Gemini Nano on at least 85% of at least 6 held-back pages it was sure about, it
+   sorts the tabs it's sure about by itself, in milliseconds, and Gemini Nano is only
+   asked about the rest. The **Model** page shows how far it has got, both models'
+   time per tab, and buttons to retrain or forget it.
+10. **Personalise (optional, off by default).** Tick **Personalise sorting
    (experimental)** in the popup and Threadline learns from your drags and from
    switching back and forth between two tabs. This only affects the order inside a
    subcategory, and it hasn't been shown to help (see Evaluation).
@@ -193,12 +202,32 @@ including random drags, so it does no real harm but learns little. An earlier
 why this feature is off by default. A proper test would record real people's
 corrections, hold some out, and compare.
 
+### The fast model (`npm run eval:student`)
+
+The 83 hand-labelled sites stand in for Gemini Nano's answers. With five-fold
+cross-validation, the student trains on four fifths of the sites (plus every
+category description) and is tested on the fifth it never saw:
+
+| | Right on unseen sites |
+| --- | ---: |
+| Description matching (the current model) | 78/83 (94%) |
+| Trained student, every answer | 72/83 (87%) |
+| Trained student, only when sure (≥ 0.6) | 40/40 (100%), on 48% of sites |
+
+On its own, the student is worse than description matching after 66 examples, so it
+never answers alone: it answers only when it's sure, which was always right here,
+and passes the rest on. Once embedded, deciding takes about 0.04 ms a tab; embedding
+the page takes about 10 ms. Training on the full 400 examples takes about 1.7 s in
+Node. These are category-level labels on 83 sites, so treat them as a sanity check:
+the Model page shows the real numbers against your own Gemini Nano answers.
+
 ## Project layout
 
 ```
 background.js        MV3 service worker: tab lifecycle, serialised storage writes, messages
 content_script.js    Page text extraction + dwell tracking (shipped as-is, no imports)
-src/ml/              categories, embedder, graph (chain), personalise, feedback,
+src/ml/              categories, embedder, graph (chain), nano (Gemini Nano),
+                     student (the fast model), personalise, feedback,
                      implicitFeedback, recency, pipeline
 src/offscreen/       Hidden page that classifies tabs for the service worker
 blocked.html/.js     The page strict focus shows
@@ -220,8 +249,13 @@ See [CODE_GUIDE.md](CODE_GUIDE.md) for a guided tour of the code and
   to a different address loses its protection from automatic sorting.
 - **Categories will sometimes be wrong**, especially for sites that aren't on the known
   list. Correct one once and it's remembered for that site.
-- Gemini Nano hasn't been measured against the current model yet: use the comparison
-  on the Model page. It only reads English, Japanese, Spanish, German and French.
+- Gemini Nano has only been compared with the current model on a handful of tabs:
+  use the comparison on the Model page. It only reads English, Japanese, Spanish,
+  German and French.
+- The fast model is only tested against Gemini Nano, not against what you'd have
+  picked, so it learns Gemini Nano's mistakes too. Your corrections count three times
+  as much as its answers. It needs a few dozen Gemini Nano answers before it takes
+  over.
 - Short searches give the model little to go on, so a vague one can land in the wrong
   category.
 - YouTube's category for a video is whatever the uploader picked, and is read from
