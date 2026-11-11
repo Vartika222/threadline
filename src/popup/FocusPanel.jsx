@@ -96,7 +96,7 @@ export default function FocusPanel() {
           <button
             key={c.name}
             className={`chip ${category === c.name ? 'chip-on' : ''}`}
-            style={category === c.name ? { borderColor: c.hex, color: c.hex } : undefined}
+            style={category === c.name ? { boxShadow: `inset 0 0 0 2px ${c.hex}` } : undefined}
             onClick={() => setCategory(c.name)}
           >
             {c.name}

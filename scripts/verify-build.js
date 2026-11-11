@@ -73,7 +73,7 @@ try {
     ['version',          !!manifest.version,              'version is missing'],
     ['background',       !!manifest.background,           'background is missing'],
     ['background.service_worker', !!manifest.background?.service_worker, 'background.service_worker is missing'],
-    ['action.default_popup', !!manifest.action?.default_popup, 'action.default_popup is missing'],
+    ['side_panel.default_path', !!manifest.side_panel?.default_path, 'side_panel.default_path is missing'],
     ['permissions includes tabs',    manifest.permissions?.includes('tabs'),    'tabs permission missing'],
     ['permissions includes storage', manifest.permissions?.includes('storage'), 'storage permission missing'],
     ['permissions includes tabGroups', manifest.permissions?.includes('tabGroups'), 'tabGroups permission missing'],
