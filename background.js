@@ -252,6 +252,9 @@ async function injectContentScriptIntoOpenTabs() {
   }
 }
 
+// Clicking the toolbar icon opens Threadline as a full-height side panel.
+chrome.sidePanel?.setPanelBehavior({ openPanelOnActionClick: true })?.catch(() => {});
+
 chrome.runtime.onInstalled?.addListener(async () => {
   setUpMemory();
   await syncStoreWithOpenTabs();

@@ -45,6 +45,15 @@ function Squirrel({ className }) {
   return <span className={className} aria-hidden="true" dangerouslySetInnerHTML={{ __html: squirrelSvg({ size: 32 }) }} />;
 }
 
+/** A 24px line icon, 1.5px stroke, in the text colour. */
+function Icon({ d }) {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true">
+      <path d={d} fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
 export default function App() {
   const [view, setView] = useState('idle');
   const [page, setPage] = useState('tabs'); // inside the idle view
@@ -79,9 +88,23 @@ export default function App() {
     });
   }, []);
 
-  // Load tabs on mount
+  // Load tabs on mount, and again when they change: the side panel stays open while you browse.
   useEffect(() => {
     loadTabs();
+    let timer;
+    const refresh = () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        loadTabs();
+        chrome.runtime.sendMessage({ type: 'GET_SORT_STATE' }).then(state => {
+          setCanUndo(state.canUndo);
+          setPlacements(state.placements || {});
+        }).catch(() => {});
+      }, 400);
+    };
+    const events = [chrome.tabs.onCreated, chrome.tabs.onRemoved, chrome.tabs.onUpdated, chrome.tabs.onActivated, chrome.tabs.onMoved];
+    events.forEach(e => e.addListener(refresh));
+    return () => { clearTimeout(timer); events.forEach(e => e.removeListener(refresh)); };
   }, []);
 
   async function loadTabs() {
@@ -199,9 +222,18 @@ export default function App() {
 
   async function handleStash() {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    const result = tab && await chrome.runtime.sendMessage({ type: 'STASH_PAGE', tabId: tab.id });
-    setStashNote(result?.ok ? 'Stashed ✓' : "Can't stash");
-    setTimeout(() => setStashNote(null), 1500);
+    let result;
+    try {
+      result = tab && await chrome.runtime.sendMessage({ type: 'STASH_PAGE', tabId: tab.id });
+    } catch (err) {
+      result = { error: err.message };
+    }
+    // Say why: Chrome's own pages can't be stashed, and an old background needs a reload.
+    const why = !/^https?:/.test(tab?.url || '') ? "Chrome's own pages can't be stashed"
+      : /Unknown message/.test(result?.error || '') ? 'Reload Threadline in chrome://extensions'
+      : result?.error;
+    setStashNote(result?.ok ? { ok: true } : { text: `Can't stash. ${why || 'Try again.'}` });
+    setTimeout(() => setStashNote(null), result?.ok ? 1500 : 4000);
   }
 
   async function handleSnapshot() {
@@ -234,21 +266,27 @@ export default function App() {
           <Squirrel className="logo-mark" />
           <span className="logo-text">Threadline</span>
         </div>
-        <div className="header-actions">
-          <button className="snapshot-btn" onClick={handleStash} title="Stash this page to your memory (Alt+Shift+S)">
-            {stashNote || 'Stash'}
-          </button>
-          <button className="snapshot-btn" onClick={() => chrome.runtime.sendMessage({ type: 'OPEN_MEMORY' })} title="Search everything you've seen, your stash, trails and projects">
-            Memory
-          </button>
-          <button className="snapshot-btn" onClick={handleSnapshot} title="Save this window's tabs, order and groups">
-            {savedNote ? 'Saved ✓' : 'Save'}
-          </button>
-        </div>
+        <span className="header-meta">{tabs.length} tabs</span>
       </header>
+
+      <div className="actions">
+        <button className="action" onClick={handleStash} title="Stash this page to your memory (Alt+Shift+S)">
+          <span className="action-icon"><Icon d="M7 4h10v16l-5-3.5L7 20z" /></span>
+          {stashNote?.ok ? 'Stashed' : 'Stash'}
+        </button>
+        <button className="action" onClick={() => chrome.tabs.create({ url: chrome.runtime.getURL('memory.html') })} title="Search everything you've seen, your stash, trails and projects">
+          <span className="action-icon"><Icon d="M10.5 17a6.5 6.5 0 1 0 0-13 6.5 6.5 0 0 0 0 13zM15.5 15.5 20 20" /></span>
+          Memory
+        </button>
+        <button className="action" onClick={handleSnapshot} title="Save this window's tabs, order and groups">
+          <span className="action-icon"><Icon d="M4 8l8-4 8 4-8 4zM4 12l8 4 8-4M4 16l8 4 8-4" /></span>
+          {savedNote ? 'Saved' : 'Save'}
+        </button>
+      </div>
 
       {/* Main content */}
       <main className="main">
+        {stashNote?.text && <div className="error" role="status">{stashNote.text}</div>}
 
         {view === 'idle' && (
           <nav className="page-tabs">
@@ -273,9 +311,6 @@ export default function App() {
 
         {view === 'idle' && page === 'tabs' && (
           <div className="idle-view">
-            <div className="tab-count">
-              {tabs.length} tabs open
-            </div>
             <SortButton onClick={handleSort} />
             <label className="auto-sort-toggle">
               <input type="checkbox" checked={autoSort} onChange={handleToggleAutoSort} />
@@ -294,9 +329,7 @@ export default function App() {
                     style={{ opacity: 0.55 + recency * 0.45 }}
                     title={formatIdleDuration(tab.lastActive)}
                   >
-                    {tab.favIconUrl && (
-                      <img src={tab.favIconUrl} className="favicon" alt="" />
-                    )}
+                    {tab.favIconUrl ? <img src={tab.favIconUrl} className="favicon" alt="" /> : <span className="favicon" />}
                     <span className="tab-title">{tab.title || 'Untitled'}</span>
                     {/^https?:/.test(tab.url || '') && (
                       <select
