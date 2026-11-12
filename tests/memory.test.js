@@ -5,7 +5,7 @@
  */
 import { makeRunner, assert } from './helpers/chromeMock.js';
 import {
-  search, buildSessions, buildTrails, findProjects, nameFor, resurface, related, dayOf,
+  search, buildSessions, buildTrails, findProjects, nameFor, resurface, related, dayOf, pageKey,
   DAY_MS, SESSION_GAP_MS, VISIT_CAP_MS,
 } from '../src/memory/memory.js';
 
@@ -75,6 +75,23 @@ test('interleaved topics in one session become separate trails, named from their
   assert(names.join() === 'Careers,Redis', names.join()); // the 30 s look at lofi radio is not a trail
   const redis = trails.find(t => t.name === 'Redis');
   assert(redis.pages.length === 2 && redis.ms === 9 * MIN && redis.endsAt.url === 'r1', JSON.stringify(redis));
+});
+
+test('going back to a page is one page to reopen, and a step in the path', () => {
+  const a1 = 'https://www.redis.io/docs/persistence/?utm_source=x', a2 = 'https://redis.io/docs/persistence', b = 'https://redis.io/docs/resp';
+  const pages = new Map([[a1, { title: 'Redis persistence', vector: near('redis') }], [a2, { title: 'Redis persistence', vector: near('redis') }], [b, { title: 'Redis RESP', vector: near('redis') }]]);
+  const visits = [a1, b, a2].map((url, i) => ({ url, at: T0 + i * 3 * MIN }));
+  visits.push({ away: true, at: T0 + 9 * MIN });
+  const [trail] = buildTrails(visits, pages);
+  assert(trail.pages.length === 2 && trail.pages[0].url === a2, trail.pages.map(p => p.url).join());
+  assert(trail.pages[0].urls.length === 2, 'both addresses kept, so deleting forgets both');
+  assert(trail.steps.map(s => s.back).join() === 'false,false,true', JSON.stringify(trail.steps));
+});
+
+test('page keys keep what names a page and drop tracking', () => {
+  assert(pageKey('https://www.youtube.com/watch?v=abc&t=30') !== pageKey('https://www.youtube.com/watch?v=xyz'), 'different videos');
+  assert(pageKey('https://example.com/a/?utm_source=x&ref=y') === pageKey('https://example.com/a'), 'tracking dropped');
+  assert(pageKey('https://www.google.com/search?q=redis&sca=1') !== pageKey('https://www.google.com/search?q=kafka'), 'different searches');
 });
 
 section('projects');

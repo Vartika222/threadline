@@ -148,3 +148,24 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 }
 
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+
+/* Trail tools: rename, delete, reorder, and the path you took */
+.m-row-actions { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+.m-btn-danger:hover { color: var(--error); }
+.m-trail { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); gap: 24px; margin-top: 16px; }
+.m-trail .m-h2 { margin: 0 0 10px; }
+.m-path { list-style: none; position: relative; padding-left: 18px; }
+.m-path::before { content: ''; position: absolute; left: 4px; top: 10px; bottom: 10px; width: 1px; background: var(--hairline); }
+.m-path li { position: relative; display: flex; gap: 12px; align-items: baseline; padding: 6px 0; font-size: 14px; }
+.m-path li::before { content: ''; position: absolute; left: -18px; top: 12px; width: 9px; height: 9px; border-radius: 50%; background: var(--white); border: 1px solid var(--ink); }
+.m-path .m-step-back::before { background: var(--ink); }
+.m-back { color: var(--graphite); }
+.m-page-row { display: flex; align-items: center; gap: 4px; }
+.m-page-row > button { flex: 1; min-width: 0; }
+.m-page-tools { display: flex; align-items: center; gap: 2px; opacity: 0; transition: opacity .2s; }
+.m-page-row:hover .m-page-tools, .m-page-tools:focus-within { opacity: 1; }
+.m-page-tools button { display: grid; place-items: center; min-width: 28px; height: 28px; padding: 0 6px; border-radius: var(--r-pill); color: var(--graphite); font-size: 12px; }
+.m-page-tools button:hover:not(:disabled) { background: var(--white); color: var(--ink); }
+.m-page-tools .m-x-on:hover { color: var(--error); }
+.m-page-tools button:disabled { opacity: .3; cursor: default; }
+@media (max-width: 760px) { .m-trail { grid-template-columns: 1fr; } .m-page-tools { opacity: 1; } }

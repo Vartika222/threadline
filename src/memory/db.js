@@ -86,6 +86,18 @@ export const forgetBefore = (before) => transact(['pages', 'visits'], 'readwrite
   s.visits.index('at').openCursor(range).onsuccess = (e) => { const c = e.target.result; if (c) { c.delete(); c.continue(); } };
 });
 
+/** Deletes the visits to `urls` between two times (inclusive): how a trail, or one page of it, is deleted. Pages stay searchable. */
+export const forgetVisits = (urls, from, to) => transact(['visits'], 'readwrite', (s) => {
+  const wanted = new Set(urls);
+  s.visits.index('at').openCursor(IDBKeyRange.bound(from, to)).onsuccess = (e) => {
+    const c = e.target.result;
+    if (!c) return;
+    // Left as a gap, so the page visited before it isn't credited with this time.
+    if (wanted.has(c.value.url)) c.update({ away: true, at: c.value.at });
+    c.continue();
+  };
+});
+
 /** Deletes every page and visit from one site (stash items too, if `withStash`). */
 export const forgetSite = (host, { withStash = false } = {}) => transact(STORES, 'readwrite', (s) => {
   const names = withStash ? STORES : ['pages', 'visits'];
