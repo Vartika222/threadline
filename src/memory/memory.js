@@ -124,6 +124,21 @@ export function nameFor(titles) {
   return top.join(' ') || (titles[0] || 'Untitled').slice(0, 40);
 }
 
+// Query values that name a different page (a search, a video, an item); everything else (tracking, sort, tab state) is ignored.
+// shortcut: a fixed list, so a site that puts its page id in another parameter merges its pages; add the name here when one does.
+const PAGE_PARAMS = ['q', 'query', 'search_query', 'k', 'v', 'list', 'id', 'p', 'page', 'currentJobId'];
+
+/** One key per page: "site 1, then site 2, then site 1 again" is two pages, not three. */
+export function pageKey(url) {
+  try {
+    const u = new URL(url);
+    const kept = PAGE_PARAMS.filter(name => u.searchParams.has(name)).map(name => `${name}=${u.searchParams.get(name)}`);
+    return `${u.host.replace(/^www\./, '')}${u.pathname.replace(/\/+$/, '')}${kept.length ? `?${kept.join('&')}` : ''}`;
+  } catch {
+    return url;
+  }
+}
+
 /**
  * Trails: within each session, the visits that belong together. A trail needs
  * at least two pages or five minutes, so one quick look isn't a trail.
@@ -132,25 +147,37 @@ export function nameFor(titles) {
 export function buildTrails(visits, pages) {
   const trails = [];
   for (const session of buildSessions(visits)) {
-    const byUrl = new Map();
+    const byKey = new Map();
     for (const visit of session.visits) {
-      const entry = byUrl.get(visit.url) || { url: visit.url, title: visit.title, ms: 0, first: visit.at, last: visit.at, ...pages.get(visit.url) };
+      const key = pageKey(visit.url);
+      const entry = byKey.get(key) || { key, urls: new Set(), ms: 0, first: visit.at };
+      Object.assign(entry, pages.get(visit.url)); // the latest visit's page record wins, url included
+      entry.url = visit.url;
+      entry.urls.add(visit.url);
       entry.ms += visit.ms;
       entry.last = visit.at;
       entry.title = pages.get(visit.url)?.title || visit.title || entry.title;
-      byUrl.set(visit.url, entry);
+      byKey.set(key, entry);
     }
-    for (const group of groupRelated([...byUrl.values()])) {
+    for (const group of groupRelated([...byKey.values()])) {
       const ms = group.reduce((s, p) => s + p.ms, 0);
       if (group.length < 2 && ms < 5 * 60 * 1000) continue;
       const ordered = [...group].sort((a, b) => a.first - b.first);
       const endsAt = [...group].sort((a, b) => b.last - a.last)[0];
+      // The path you took through these pages, in order, with going back to a page kept as a step.
+      const inGroup = new Map(group.map(p => [p.key, p]));
+      const steps = [];
+      for (const visit of session.visits) {
+        const page = inGroup.get(pageKey(visit.url));
+        if (page && steps.at(-1)?.key !== page.key) steps.push({ key: page.key, title: page.title, url: page.url, at: visit.at, back: steps.some(s => s.key === page.key) });
+      }
       trails.push({
         name: nameFor(group.map(p => p.title)),
         start: ordered[0].first,
         end: endsAt.last,
         ms,
-        pages: ordered.map(({ url, title, host, category }) => ({ url, title, host, category })),
+        pages: ordered.map(({ key, url, urls, title, host, category }) => ({ key, url, urls: [...urls], title, host, category })),
+        steps,
         endsAt: { url: endsAt.url, title: endsAt.title },
         category: majority(group.map(p => p.category)),
       });

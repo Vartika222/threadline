@@ -229,10 +229,10 @@ export default function App() {
       result = { error: err.message };
     }
     // Say why: Chrome's own pages can't be stashed, and an old background needs a reload.
-    const why = !/^https?:/.test(tab?.url || '') ? "Chrome's own pages can't be stashed"
+    const why = !/^https?:/.test(tab?.url || '') ? 'This tab is a browser page (New Tab, Settings, an extension). Open a website and stash it there.'
       : /Unknown message/.test(result?.error || '') ? 'Reload Threadline in chrome://extensions'
       : result?.error;
-    setStashNote(result?.ok ? { ok: true } : { text: `Can't stash. ${why || 'Try again.'}` });
+    setStashNote(result?.ok ? { ok: true } : { text: `Nothing stashed. ${why || 'Try again.'}` });
     setTimeout(() => setStashNote(null), result?.ok ? 1500 : 4000);
   }
 

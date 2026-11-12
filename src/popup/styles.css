@@ -49,7 +49,13 @@ button { cursor: pointer; background: none; border: 0; }
 * { scrollbar-color: var(--stone) transparent; scrollbar-width: thin; }
 input[type="checkbox"] { accent-color: var(--ink); width: 16px; height: 16px; }
 
-.app { display: flex; flex-direction: column; min-height: 100vh; }
+.app { display: flex; flex-direction: column; min-height: 100vh; max-width: 560px; margin: 0 auto; }
+@media (min-width: 600px) { body { background: var(--linen); } .app { background: var(--canvas); } }
+@media (max-width: 340px) {
+  .header, .actions, .main { padding-left: 14px; padding-right: 14px; }
+  .action { padding: 12px 4px 10px; font-size: 12px; }
+  .category-select { max-width: 96px; }
+}
 
 /* ── HEADER ───────────────────────────────────────── */
 

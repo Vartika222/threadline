@@ -7,13 +7,16 @@
  * memory.js. The search box embeds your words with the same model as the tabs.
  */
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { getAll, remove, visitsSince, forgetSite, eraseAll } from './db.js';
+import { getAll, remove, visitsSince, forgetSite, forgetVisits, eraseAll } from './db.js';
 import { search, buildTrails, findProjects, buildSessions, dayOf, DAY_MS } from './memory.js';
 import { embedTexts } from '../ml/embedder.js';
 import { squirrelSvg } from '../popup/squirrel.js';
 
 const PAUSED_KEY = 'memory_paused';     // same keys as background.js
 const EXCLUDED_KEY = 'memory_excluded';
+// Your names and page order for trails, keyed by when the trail started.
+// shortcut: deleting a trail's first page changes its start, so its name and order are dropped; key by session if that bites.
+const TRAIL_EDITS_KEY = 'trail_edits';
 
 function duration(ms) {
   const minutes = Math.round(ms / 60000);
@@ -204,7 +207,7 @@ export default function MemoryApp() {
           </>
         )}
         {showing === 'stash' && <StashGrid stash={stash} loaded={loaded} openTabs={openTabs} onDelete={deleteStash} />}
-        {showing === 'trails' && <Trails trails={trails} loaded={loaded} openTabs={openTabs} />}
+        {showing === 'trails' && <Trails trails={trails} loaded={loaded} openTabs={openTabs} onChanged={load} />}
         {showing === 'projects' && <Projects projects={projects} loaded={loaded} openTabs={openTabs} />}
       </main>
 
@@ -296,34 +299,116 @@ function PageList({ pages, openTabs }) {
   );
 }
 
-function Trails({ trails, loaded, openTabs }) {
-  const [openIndex, setOpenIndex] = useState(null);
-  if (loaded && trails.length === 0) {
+function Chevron({ up }) {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
+      <path d={up ? 'M3 9l4-4 4 4' : 'M3 5l4 4 4-4'} fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+/** A trail with your name and page order applied. */
+function edited(trail, edit) {
+  if (!edit) return trail;
+  const rank = (p) => { const i = edit.order?.indexOf(p.key) ?? -1; return i < 0 ? Infinity : i; };
+  return { ...trail, name: edit.name || trail.name, pages: [...trail.pages].sort((a, b) => rank(a) - rank(b)) };
+}
+
+function Trails({ trails: found, loaded, openTabs, onChanged }) {
+  const [openKey, setOpenKey] = useState(null);
+  const [edits, setEdits] = useState({});
+  useEffect(() => { chrome.storage.local.get(TRAIL_EDITS_KEY).then(r => setEdits(r[TRAIL_EDITS_KEY] || {})); }, []);
+
+  async function saveEdit(key, change) {
+    const next = { ...edits, [key]: { ...edits[key], ...change } };
+    setEdits(next);
+    await chrome.storage.local.set({ [TRAIL_EDITS_KEY]: next });
+  }
+
+  function rename(trail) {
+    const name = prompt('Name this trail', trail.name);
+    if (name?.trim()) saveEdit(trail.start, { name: name.trim().slice(0, 60) });
+  }
+
+  function move(trail, index, by) {
+    const order = trail.pages.map(p => p.key);
+    [order[index], order[index + by]] = [order[index + by], order[index]];
+    saveEdit(trail.start, { order });
+  }
+
+  async function forget(trail, pages) {
+    const what = pages.length === trail.pages.length ? `the trail "${trail.name}"` : `"${pages[0].title || hostOf(pages[0].url)}" from this trail`;
+    if (!confirm(`Delete ${what}? The pages stay searchable; only these visits are forgotten.`)) return;
+    await forgetVisits(pages.flatMap(p => p.urls), trail.start, trail.end);
+    await onChanged();
+  }
+
+  if (loaded && found.length === 0) {
     return <Empty>No trails yet. As you browse, Threadline links the pages you move between into trails, one per thing you were doing.</Empty>;
   }
   let lastDay = null;
   return (
     <div className="m-list">
-      {trails.map((trail, i) => {
+      {found.map((raw) => {
+        const trail = edited(raw, edits[raw.start]);
+        const isOpen = openKey === trail.start;
         const day = dayLabel(trail.start);
         const heading = day !== lastDay ? <h2 className="m-h2">{day}</h2> : null;
         lastDay = day;
         return (
-          <React.Fragment key={`${trail.start}-${i}`}>
+          <React.Fragment key={trail.start}>
             {heading}
             <article className="m-row">
               <div className="m-row-head">
-                <button className="m-row-title" onClick={() => setOpenIndex(openIndex === i ? null : i)} aria-expanded={openIndex === i}>
+                <button className="m-row-title" onClick={() => setOpenKey(isOpen ? null : trail.start)} aria-expanded={isOpen}>
                   <span className="m-time">{new Date(trail.start).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}</span>
                   <span className="m-name">{trail.name}</span>
                 </button>
-                <button className="m-btn" onClick={() => openTogether(trail.name, trail.pages.map(p => p.url))}>Reopen trail</button>
+                <div className="m-row-actions">
+                  <button className="m-btn m-btn-quiet" onClick={() => rename(trail)}>Rename</button>
+                  <button className="m-btn m-btn-quiet m-btn-danger" onClick={() => forget(trail, trail.pages)}>Delete</button>
+                  <button className="m-btn" onClick={() => openTogether(trail.name, trail.pages.map(p => p.url))}>
+                    Reopen {trail.pages.length} page{trail.pages.length === 1 ? '' : 's'}
+                  </button>
+                </div>
               </div>
               <p className="m-meta">
-                {duration(trail.ms)} across {trail.pages.length} page{trail.pages.length === 1 ? '' : 's'}
+                {duration(trail.ms)} · {trail.steps.length > trail.pages.length ? `${trail.steps.length} steps across ` : ''}{trail.pages.length} page{trail.pages.length === 1 ? '' : 's'}
                 {trail.category && ` · ${trail.category}`} · ended at {trail.endsAt.title || hostOf(trail.endsAt.url)}
               </p>
-              {openIndex === i && <PageList pages={trail.pages} openTabs={openTabs} />}
+              {isOpen && (
+                <div className="m-trail">
+                  <section>
+                    <h3 className="m-h2">Your path</h3>
+                    <ol className="m-path">
+                      {trail.steps.map((step, i) => (
+                        <li key={i} className={step.back ? 'm-step-back' : ''}>
+                          <span className="m-time">{new Date(step.at).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}</span>
+                          <span>{step.back && <span className="m-back">back to </span>}{step.title || hostOf(step.url)}</span>
+                        </li>
+                      ))}
+                    </ol>
+                  </section>
+                  <section>
+                    <h3 className="m-h2">Pages, in the order Reopen opens them</h3>
+                    <ul className="m-pages">
+                      {trail.pages.map((p, i) => (
+                        <li key={p.key} className="m-page-row">
+                          <button onClick={() => openUrl(p.url, openTabs)}>
+                            <span>{p.title || p.url}</span>
+                            <span className="m-meta">{p.host || hostOf(p.url)}{openTabs.has(p.url) && <span className="m-open"> · open</span>}</span>
+                          </button>
+                          <span className="m-page-tools">
+                            <button aria-label={`Move ${p.title} up`} disabled={i === 0} onClick={() => move(trail, i, -1)}><Chevron up /></button>
+                            <button aria-label={`Move ${p.title} down`} disabled={i === trail.pages.length - 1} onClick={() => move(trail, i, 1)}><Chevron /></button>
+                            <button aria-label={`Remove ${p.title} from this trail`} className="m-x-on" onClick={() => forget(trail, [p])}>Remove</button>
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  </section>
+                </div>
+              )}
             </article>
           </React.Fragment>
         );
