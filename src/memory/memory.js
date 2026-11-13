@@ -7,6 +7,7 @@
  *   page   { url, title, host, text, category, subcategory, vector, firstSeen, lastSeen, days }
  *   stash  { id, kind: 'page'|'quote'|'image', url, title, quote?, imageUrl?, text, category, vector, savedAt }
  *   visit  { url, title, at } or { away: true, at }   (one per tab switch or navigation)
+ *          or { link: true, from, url, at }         (you followed a link from one page to another)
  *
  * Vectors are unit-length MiniLM embeddings, so a dot product is the cosine.
  * The thresholds come from measuring MiniLM on real tab titles: pages on the same
@@ -19,8 +20,8 @@ export const SESSION_GAP_MS = 30 * 60 * 1000; // away this long and a new sessio
 export const VISIT_CAP_MS = 30 * 60 * 1000;   // shortcut: no idle detection, so one visit counts at most 30 min; add chrome.idle if trails overcount
 export const SEARCH_MIN = 0.25;
 export const RESURFACE_MIN = 0.45;
-const LINK_ALONE = 0.35;        // related whatever their categories
-const LINK_SAME_CATEGORY = 0.2; // related when they also share a category
+const SAME_TOPIC = 0.35; // enough on its own to put two pages together
+const LINKED = 0.15;     // enough when you followed a link between them; a launcher page (Gmail, Slack) still can't glue unrelated pages
 
 export function dot(a, b) {
   let s = 0;
@@ -34,12 +35,8 @@ export function dayOf(time) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
-/** Whether two records are about the same thing. */
-export function related(a, b) {
-  if (!a.vector || !b.vector) return Boolean(a.subcategory && a.category === b.category && a.subcategory === b.subcategory);
-  const score = dot(a.vector, b.vector);
-  return score >= LINK_ALONE || (score >= LINK_SAME_CATEGORY && Boolean(a.category) && a.category === b.category);
-}
+/** The key a pair of pages is kept apart under, whichever order they come in. */
+export const pairKey = (a, b) => [a, b].sort().join(' | ');
 
 const words = (text) => (text || '').toLowerCase().match(/[\p{L}\p{N}]+/gu) || [];
 
@@ -67,7 +64,7 @@ export function search(queryVector, query, records, { limit = 30 } = {}) {
  * counted, and being away for SESSION_GAP_MS or more starts a new session.
  */
 export function buildSessions(visits) {
-  const sorted = [...visits].sort((a, b) => a.at - b.at);
+  const sorted = visits.filter(v => !v.link).sort((a, b) => a.at - b.at);
   const sessions = [];
   let current = null;
   for (let i = 0; i < sorted.length; i++) {
@@ -86,27 +83,27 @@ export function buildSessions(visits) {
 }
 
 /**
- * Groups related records. Each joins the group whose average it's most related to,
- * or starts its own; comparing with the whole group, not any one member, stops
- * a chain of loose links from pulling unrelated topics together.
+ * Groups records by meaning. Each joins the group whose average it's closest to,
+ * if it scores at least what `bar(item, members)` asks; otherwise it starts its own.
+ * Comparing with the whole group, not any one member, stops a chain of loose
+ * matches from pulling unrelated topics together.
  */
-function cluster(items) {
+function cluster(items, bar = () => SAME_TOPIC) {
   const groups = [];
   for (const item of items) {
     let best = null;
     let bestScore = -Infinity;
     for (const group of groups) {
-      if (!item.vector || !group.centre) continue;
-      const score = dot(item.vector, group.centre);
-      if (related(item, { vector: group.centre, category: group.category }) && score > bestScore) { best = group; bestScore = score; }
+      const score = item.vector && group.centre ? dot(item.vector, group.centre) : 0;
+      if (score >= bar(item, group.items) && score > bestScore) { best = group; bestScore = score; }
     }
-    if (!best) groups.push(best = { items: [], sum: item.vector ? new Array(item.vector.length).fill(0) : null });
+    if (!best) groups.push(best = { items: [], sum: null });
     best.items.push(item);
-    if (best.sum) {
+    if (item.vector) {
+      best.sum ||= new Array(item.vector.length).fill(0);
       for (let i = 0; i < item.vector.length; i++) best.sum[i] += item.vector[i];
       best.centre = normalise(best.sum);
     }
-    best.category = majority(best.items.map(p => p.category));
   }
   return groups.map(g => g.items);
 }
@@ -160,11 +157,19 @@ export function pageKey(url) {
 }
 
 /**
- * Trails: within each session, the visits that belong together. A trail is a
- * move between at least two pages; sitting on one page isn't a trail.
+ * Trails: within each session, the pages that belong together. Pages join on
+ * meaning, more easily when you followed a link between them, and never when
+ * you took one out of a trail with the other (`keptApart`, from pairKey).
+ * A trail is a move between at least two pages; sitting on one page isn't one.
  * `pages` maps url → page record (for vectors and categories).
  */
-export function buildTrails(visits, pages) {
+export function buildTrails(visits, pages, { keptApart = new Set() } = {}) {
+  const links = new Set(visits.filter(v => v.link).map(v => `${pageKey(v.from)}>${pageKey(v.url)}`));
+  const bar = (page, members) => {
+    if (members.some(m => keptApart.has(pairKey(page.key, m.key)))) return Infinity;
+    if (members.some(m => links.has(`${m.key}>${page.key}`) || links.has(`${page.key}>${m.key}`))) return LINKED;
+    return SAME_TOPIC;
+  };
   const trails = [];
   for (const session of buildSessions(visits)) {
     const byKey = new Map();
@@ -179,7 +184,7 @@ export function buildTrails(visits, pages) {
       entry.title = cleanTitle(pages.get(visit.url)?.title || visit.title || entry.title);
       byKey.set(key, entry);
     }
-    for (const group of cluster([...byKey.values()])) {
+    for (const group of cluster([...byKey.values()], bar)) {
       if (group.length < 2) continue;
       const ms = group.reduce((s, p) => s + p.ms, 0);
       const ordered = [...group].sort((a, b) => a.first - b.first);
@@ -196,7 +201,8 @@ export function buildTrails(visits, pages) {
         start: ordered[0].first,
         end: endsAt.last,
         ms,
-        pages: ordered.map(({ key, url, urls, title, host, category }) => ({ key, url, urls: [...urls], title, host, category })),
+        pages: ordered.map(({ key, url, urls, title, host, category, ms: pageMs }) => ({ key, url, urls: [...urls], title, host, category, ms: pageMs })),
+        vector: average(group),
         steps,
         endsAt: { url: endsAt.url, title: endsAt.title },
         category: majority(group.map(p => p.category)),
@@ -214,47 +220,55 @@ function majority(values) {
   return [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || null;
 }
 
+function average(records) {
+  const withVectors = records.filter(r => r.vector);
+  if (!withVectors.length) return null;
+  return normalise(withVectors[0].vector.map((_, i) => withVectors.reduce((s, r) => s + r.vector[i], 0)));
+}
+
 function normalise(v) {
   const n = Math.hypot(...v) || 1;
   return v.map(x => x / n);
 }
 
 /**
- * Projects: pages that keep coming up together over several days. Each page joins
- * the group whose average it's most related to, or starts its own; a group counts
- * as a project once it has `minPages` pages seen on `minDays` different days.
- * `timeByUrl` (optional) adds the time spent from visits.
+ * Projects: trails you came back to on different days. Two trails join when they
+ * share a page, or their averages are about the same topic; pages taken out of a
+ * trail together are kept apart here too. A group counts once it covers
+ * `minPages` pages on `minDays` days.
  */
-export function findProjects(pages, { minPages = 4, minDays = 2, timeByUrl = new Map() } = {}) {
-  // One entry per page: the same address, or the same title on the same site ("Two Sum - LeetCode" at /two-sum and /two-sum/description).
-  const merged = new Map();
-  for (const page of [...pages].sort((a, b) => (b.lastSeen || 0) - (a.lastSeen || 0))) {
-    const title = cleanTitle(page.title);
-    const keys = [pageKey(page.url), title && `${page.host || hostOf(page.url)}|${title.toLowerCase()}`].filter(Boolean);
-    const same = keys.map(k => merged.get(k)).find(Boolean);
-    if (same) {
-      same.days = [...new Set([...(same.days || []), ...(page.days || [])])];
-      same.firstSeen = Math.min(same.firstSeen || Infinity, page.firstSeen || Infinity);
-      same.ms += timeByUrl.get(page.url) || 0;
-      keys.forEach(k => merged.set(k, same));
-    } else {
-      const entry = { ...page, title, ms: timeByUrl.get(page.url) || 0 };
-      keys.forEach(k => merged.set(k, entry));
-    }
-  }
-  const unique = [...new Set(merged.values())].filter(p => p.vector).sort((a, b) => (a.firstSeen || 0) - (b.firstSeen || 0));
-  const groups = cluster(unique).map(items => ({ pages: items, category: majority(items.map(p => p.category)) }));
-  return groups
+export function findProjects(trails, { minPages = 3, minDays = 2, keptApart = new Set() } = {}) {
+  const keysOf = (trail) => trail.pages.map(p => p.key);
+  const bar = (trail, members) => {
+    const mine = keysOf(trail);
+    const theirs = members.flatMap(keysOf);
+    if (mine.some(a => theirs.some(b => keptApart.has(pairKey(a, b))))) return Infinity;
+    if (mine.some(k => theirs.includes(k))) return -Infinity;
+    return SAME_TOPIC;
+  };
+  return cluster([...trails].sort((a, b) => a.start - b.start), bar)
     .map(group => {
-      const days = new Set(group.pages.flatMap(p => p.days || [dayOf(p.lastSeen || p.firstSeen || 0)]));
+      // One entry per page: the same address, or the same title on the same site ("Two Sum - LeetCode" at /two-sum and /two-sum/description).
+      const merged = new Map();
+      for (const trail of [...group].sort((a, b) => b.end - a.end)) {
+        for (const page of trail.pages) {
+          const title = cleanTitle(page.title);
+          const keys = [page.key, title && `${page.host || hostOf(page.url)}|${title.toLowerCase()}`].filter(Boolean);
+          const same = keys.map(k => merged.get(k)).find(Boolean);
+          if (same) same.ms += page.ms || 0;
+          const entry = same || { url: page.url, title, host: page.host, category: page.category, ms: page.ms || 0 };
+          keys.forEach(k => merged.set(k, entry));
+        }
+      }
+      const pages = [...new Set(merged.values())];
       return {
-        name: nameFor([...group.pages].sort((a, b) => b.ms - a.ms).map(p => p.title)),
-        category: group.category,
-        days: days.size,
-        lastSeen: Math.max(...group.pages.map(p => p.lastSeen || 0)),
-        ms: group.pages.reduce((s, p) => s + p.ms, 0),
-        pages: [...group.pages].sort((a, b) => (b.lastSeen || 0) - (a.lastSeen || 0))
-          .map(({ url, title, host, category }) => ({ url, title, host, category })),
+        name: nameFor([...pages].sort((a, b) => b.ms - a.ms).map(p => p.title)),
+        category: majority(group.map(t => t.category)),
+        days: new Set(group.map(t => dayOf(t.start))).size,
+        lastSeen: Math.max(...group.map(t => t.end)),
+        ms: group.reduce((s, t) => s + t.ms, 0),
+        trails: group.map(t => ({ start: t.start, name: t.name })).sort((a, b) => b.start - a.start),
+        pages: pages.map(({ url, title, host, category }) => ({ url, title, host, category })),
       };
     })
     .filter(p => p.pages.length >= minPages && p.days >= minDays)

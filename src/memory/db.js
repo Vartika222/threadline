@@ -8,7 +8,7 @@
  * Stores:
  *   pages   keyed by url (without #fragment): what each page is about
  *   stash   keyed by id: what you saved
- *   visits  auto-numbered, indexed by time: each tab switch or navigation
+ *   visits  auto-numbered, indexed by time: each tab switch or navigation, time away, and each link you followed
  *
  * Nothing here leaves the computer.
  */
@@ -92,8 +92,9 @@ export const forgetVisits = (urls, from, to) => transact(['visits'], 'readwrite'
   s.visits.index('at').openCursor(IDBKeyRange.bound(from, to)).onsuccess = (e) => {
     const c = e.target.result;
     if (!c) return;
+    if (c.value.link) { if (wanted.has(c.value.url) || wanted.has(c.value.from)) c.delete(); }
     // Left as a gap, so the page visited before it isn't credited with this time.
-    if (wanted.has(c.value.url)) c.update({ away: true, at: c.value.at });
+    else if (wanted.has(c.value.url)) c.update({ away: true, at: c.value.at });
     c.continue();
   };
 });

@@ -8,7 +8,7 @@
  */
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { getAll, remove, visitsSince, forgetSite, forgetVisits, eraseAll } from './db.js';
-import { search, buildTrails, findProjects, buildSessions, dayOf, DAY_MS, pageKey, cleanTitle } from './memory.js';
+import { search, buildTrails, findProjects, dayOf, DAY_MS, pageKey, cleanTitle, pairKey } from './memory.js';
 import { embedTexts } from '../ml/embedder.js';
 import { squirrelSvg } from '../popup/squirrel.js';
 
@@ -17,6 +17,8 @@ const EXCLUDED_KEY = 'memory_excluded';
 // Your names and page order for trails, keyed by when the trail started.
 // shortcut: deleting a trail's first page changes its start, so its name and order are dropped; key by session if that bites.
 const TRAIL_EDITS_KEY = 'trail_edits';
+// Pages you took out of a trail, kept apart from the pages they were with, as pairKey strings.
+const KEPT_APART_KEY = 'kept_apart';
 
 function duration(ms) {
   const minutes = Math.round(ms / 60000);
@@ -73,6 +75,7 @@ export default function MemoryApp() {
   const [pages, setPages] = useState([]);
   const [stash, setStash] = useState([]);
   const [visits, setVisits] = useState([]);
+  const [keptApart, setKeptApart] = useState(new Set());
   const [openTabs, setOpenTabs] = useState(new Map());
   const [paused, setPaused] = useState(false);
   const [view, setView] = useState('stash');
@@ -86,13 +89,14 @@ export default function MemoryApp() {
   async function load() {
     const [p, s, v, tabs, settings] = await Promise.all([
       getAll('pages'), getAll('stash'), visitsSince(Date.now() - 30 * DAY_MS), chrome.tabs.query({}),
-      chrome.storage.local.get(PAUSED_KEY),
+      chrome.storage.local.get([PAUSED_KEY, KEPT_APART_KEY]),
     ]);
     setPages((p || []).map(page => ({ ...page, title: cleanTitle(page.title) })));
     setStash((s || []).sort((a, b) => b.savedAt - a.savedAt));
     setVisits(v || []);
     setOpenTabs(new Map(tabs.map(t => [t.url.split('#')[0], t])));
     setPaused(settings[PAUSED_KEY] === true);
+    setKeptApart(new Set(settings[KEPT_APART_KEY] || []));
     setLoaded(true);
     return p || [];
   }
@@ -124,12 +128,10 @@ export default function MemoryApp() {
   [related, pages, stash]);
 
   const pageByUrl = useMemo(() => new Map(pages.map(p => [p.url, p])), [pages]);
-  const trails = useMemo(() => buildTrails(visits.filter(v => v.at >= Date.now() - 7 * DAY_MS), pageByUrl), [visits, pageByUrl]);
-  const projects = useMemo(() => {
-    const timeByUrl = new Map();
-    for (const session of buildSessions(visits)) for (const v of session.visits) timeByUrl.set(v.url, (timeByUrl.get(v.url) || 0) + v.ms);
-    return findProjects(pages.filter(p => p.lastSeen >= Date.now() - 30 * DAY_MS), { timeByUrl });
-  }, [pages, visits]);
+  // A month of trails makes the projects; the Trails tab shows the last week of them.
+  const allTrails = useMemo(() => buildTrails(visits, pageByUrl, { keptApart }), [visits, pageByUrl, keptApart]);
+  const trails = useMemo(() => allTrails.filter(t => t.start >= Date.now() - 7 * DAY_MS), [allTrails]);
+  const projects = useMemo(() => findProjects(allTrails, { keptApart }), [allTrails, keptApart]);
 
   async function togglePaused() {
     await chrome.storage.local.set({ [PAUSED_KEY]: !paused });
@@ -343,10 +345,17 @@ function Trails({ trails: found, loaded, openTabs, onChanged }) {
     saveEdit(trail.start, { order });
   }
 
-  async function forget(trail, pages) {
-    const what = pages.length === trail.pages.length ? `the trail "${trail.name}"` : `"${pages[0].title || hostOf(pages[0].url)}" from this trail`;
-    if (!confirm(`Delete ${what}? The pages stay searchable; only these visits are forgotten.`)) return;
-    await forgetVisits(pages.flatMap(p => p.urls), trail.start, trail.end);
+  async function forget(trail) {
+    if (!confirm(`Delete the trail "${trail.name}"? The pages stay searchable; only these visits are forgotten.`)) return;
+    await forgetVisits(trail.pages.flatMap(p => p.urls), trail.start, trail.end);
+    await onChanged();
+  }
+
+  // Taking a page out teaches Threadline it doesn't belong with the rest, in later trails and projects too.
+  async function takeOut(trail, page) {
+    const { [KEPT_APART_KEY]: saved = [] } = await chrome.storage.local.get(KEPT_APART_KEY);
+    const pairs = trail.pages.filter(p => p.key !== page.key).map(p => pairKey(page.key, p.key));
+    await chrome.storage.local.set({ [KEPT_APART_KEY]: [...new Set([...saved, ...pairs])] });
     await onChanged();
   }
 
@@ -373,7 +382,7 @@ function Trails({ trails: found, loaded, openTabs, onChanged }) {
                 </button>
                 <div className="m-row-actions">
                   <button className="m-btn m-btn-quiet" onClick={() => rename(trail)}>Rename</button>
-                  <button className="m-btn m-btn-quiet m-btn-danger" onClick={() => forget(trail, trail.pages)}>Delete</button>
+                  <button className="m-btn m-btn-quiet m-btn-danger" onClick={() => forget(trail)}>Delete</button>
                   <button className="m-btn" onClick={() => openTogether(trail.name, trail.pages.map(p => p.url))}>
                     Reopen {trail.pages.length} page{trail.pages.length === 1 ? '' : 's'}
                   </button>
@@ -408,7 +417,7 @@ function Trails({ trails: found, loaded, openTabs, onChanged }) {
                           <span className="m-page-tools">
                             <button aria-label={`Move ${p.title} up`} disabled={i === 0} onClick={() => move(trail, i, -1)}><Chevron up /></button>
                             <button aria-label={`Move ${p.title} down`} disabled={i === trail.pages.length - 1} onClick={() => move(trail, i, 1)}><Chevron /></button>
-                            <button aria-label={`Remove ${p.title} from this trail`} className="m-x-on" onClick={() => forget(trail, [p])}>Remove</button>
+                            <button aria-label={`Remove ${p.title} from this trail`} className="m-x-on" onClick={() => takeOut(trail, p)}>Remove</button>
                           </span>
                         </li>
                       ))}
@@ -427,7 +436,7 @@ function Trails({ trails: found, loaded, openTabs, onChanged }) {
 function Projects({ projects, loaded, openTabs }) {
   const [openIndex, setOpenIndex] = useState(null);
   if (loaded && projects.length === 0) {
-    return <Empty>No projects yet. When you keep coming back to the same topic on different days, Threadline gathers those pages into a project for you.</Empty>;
+    return <Empty>No projects yet. When you come back to the same trail on different days, Threadline gathers those trails into a project for you.</Empty>;
   }
   return (
     <div className="m-list">
@@ -442,11 +451,14 @@ function Projects({ projects, loaded, openTabs }) {
             </button>
           </div>
           <p className="m-meta">
-            {project.pages.length} pages over {project.days} days
+            {project.pages.length} pages from {project.trails.length} trails over {project.days} days
             {project.ms > 0 && ` · ${duration(project.ms)}`}
             {project.category && ` · ${project.category}`} · last {ago(project.lastSeen)}
           </p>
-          {openIndex === i && <PageList pages={project.pages} openTabs={openTabs} />}
+          {openIndex === i && <>
+            <p className="m-meta">You came back to it in: {project.trails.map(t => `${t.name} (${dayLabel(t.start)})`).join(', ')}</p>
+            <PageList pages={project.pages} openTabs={openTabs} />
+          </>}
         </article>
       ))}
     </div>

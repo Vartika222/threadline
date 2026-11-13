@@ -5,7 +5,7 @@
  */
 import { makeRunner, assert } from './helpers/chromeMock.js';
 import {
-  search, buildSessions, buildTrails, findProjects, nameFor, resurface, related, dayOf, pageKey, cleanTitle,
+  search, buildSessions, buildTrails, findProjects, nameFor, resurface, dayOf, pageKey, cleanTitle, pairKey,
   DAY_MS, SESSION_GAP_MS, VISIT_CAP_MS,
 } from '../src/memory/memory.js';
 
@@ -113,29 +113,79 @@ test('a loose chain of links does not pull different topics into one trail', () 
   assert(trails.map(t => t.pages.length).sort().join() === '2,3', trails.map(t => t.pages.length).join());
 });
 
+test('a followed link joins pages that are only loosely alike; without it they stay apart', () => {
+  const loose = unit(near('redis').map((x, i) => 0.15 * x + 0.85 * near('jobs')[i])); // about 0.3 alike
+  const pages = new Map([['https://a.test/x', { title: 'A', vector: near('redis') }], ['https://b.test/y', { title: 'B', vector: loose }]]);
+  const visits = [{ url: 'https://a.test/x', at: T0 }, { url: 'https://b.test/y', at: T0 + 3 * MIN }, { away: true, at: T0 + 6 * MIN }];
+  assert(buildTrails(visits, pages).length === 0, 'apart without a link');
+  const linked = [...visits, { link: true, from: 'https://a.test/x', url: 'https://b.test/y', at: T0 + 3 * MIN }];
+  const trails = buildTrails(linked, pages);
+  assert(trails.length === 1 && trails[0].pages.length === 2, JSON.stringify(trails.map(t => t.pages.length)));
+});
+
+test('a launcher page linking to unrelated topics does not glue them together', () => {
+  const pages = new Map([
+    ['https://mail.test/inbox', { title: 'Inbox', vector: near('music') }],
+    ['https://r.test/1', { title: 'Redis persistence', vector: near('redis') }], ['https://r.test/2', { title: 'Redis protocol', vector: near('redis') }],
+    ['https://j.test/1', { title: 'Stripe careers', vector: near('jobs') }], ['https://j.test/2', { title: 'Greenhouse careers', vector: near('jobs') }],
+  ]);
+  const order = ['https://mail.test/inbox', 'https://r.test/1', 'https://r.test/2', 'https://mail.test/inbox', 'https://j.test/1', 'https://j.test/2'];
+  const visits = order.map((url, i) => ({ url, at: T0 + i * 3 * MIN }));
+  visits.push({ link: true, from: order[0], url: 'https://r.test/1', at: T0 + 3 * MIN }, { link: true, from: order[0], url: 'https://j.test/1', at: T0 + 12 * MIN });
+  visits.push({ away: true, at: T0 + 18 * MIN });
+  const trails = buildTrails(visits, pages);
+  assert(trails.every(t => !(t.pages.some(p => p.url.includes('r.test')) && t.pages.some(p => p.url.includes('j.test')))), JSON.stringify(trails.map(t => t.pages.map(p => p.url))));
+});
+
+test('a page taken out of a trail is kept apart from the pages it was with', () => {
+  const pages = new Map([['https://r.test/1', { title: 'Redis a', vector: near('redis') }], ['https://r.test/2', { title: 'Redis b', vector: near('redis') }]]);
+  const visits = [{ url: 'https://r.test/1', at: T0 }, { url: 'https://r.test/2', at: T0 + 3 * MIN }, { away: true, at: T0 + 6 * MIN }];
+  assert(buildTrails(visits, pages).length === 1, 'together first');
+  const keptApart = new Set([pairKey(pageKey('https://r.test/1'), pageKey('https://r.test/2'))]);
+  assert(buildTrails(visits, pages, { keptApart }).length === 0, 'apart after');
+});
+
+test('a followed link is not a visit and adds no time', () => {
+  const [s] = buildSessions([{ url: 'a', at: T0 }, { link: true, from: 'a', url: 'b', at: T0 + MIN }, { url: 'b', at: T0 + 2 * MIN }]);
+  assert(s.visits.map(v => v.ms / MIN).join() === '2,0', s.visits.map(v => v.ms / MIN).join());
+});
+
 section('projects');
 
+// A trail as buildTrails makes it, on day `d`, with pages named by key.
+const trail = (d, keys, topic, extra = {}) => ({
+  start: T0 + d * DAY_MS, end: T0 + d * DAY_MS + 10 * MIN, ms: 10 * MIN, name: keys.join('+'), category: 'Work',
+  pages: keys.map(k => ({ key: `site.test/${k}`, url: `https://site.test/${k}`, title: k, host: 'site.test', ms: 5 * MIN })),
+  vector: near(topic), ...extra,
+});
+
+test('trails on the same topic on different days become a project, saying which trails', () => {
+  const projects = findProjects([trail(0, ['a', 'b'], 'redis'), trail(2, ['c', 'd'], 'redis'), trail(1, ['x', 'y'], 'jobs')]);
+  assert(projects.length === 1 && projects[0].days === 2 && projects[0].pages.length === 4, JSON.stringify(projects));
+  assert(projects[0].trails.map(t => t.name).join() === 'c+d,a+b', projects[0].trails.map(t => t.name).join());
+});
+
+test('trails that share a page join whatever their topic', () => {
+  const [project] = findProjects([trail(0, ['a', 'b'], 'redis'), trail(1, ['b', 'c'], 'jobs')]);
+  assert(project?.pages.length === 3, JSON.stringify(project));
+});
+
+test('one day, or fewer than three pages, is not a project', () => {
+  assert(findProjects([trail(0, ['a', 'b'], 'redis'), trail(0, ['c', 'd'], 'redis', { start: T0 + 60 * MIN })]).length === 0, 'one day');
+  assert(findProjects([trail(0, ['a', 'b'], 'redis'), trail(1, ['a', 'b'], 'redis')]).length === 0, 'two pages');
+});
+
+test('pages kept apart keep their trails apart too', () => {
+  const keptApart = new Set([pairKey('site.test/a', 'site.test/c')]);
+  assert(findProjects([trail(0, ['a', 'b'], 'redis'), trail(1, ['c', 'd'], 'redis')], { keptApart }).length === 0, 'kept apart');
+});
+
 test('the same page at two addresses is one page in a project', () => {
-  const pages = ['two-sum', 'two-sum/description', 'three-sum', 'valid-anagram', 'group-anagrams'].map((p, i) => ({
-    ...page(`leetcode.com/problems/${p}`, 'redis', { title: `${p.startsWith('two-sum') ? 'Two Sum' : p} - LeetCode`, days: [dayOf(T0 + i * DAY_MS)], lastSeen: T0 + i * DAY_MS }),
-    host: 'leetcode.com',
-  }));
-  const [project] = findProjects(pages);
-  assert(project.pages.length === 4 && project.days === 5, JSON.stringify(project.pages.map(p => p.url)));
-});
-
-test('pages that keep coming back over several days become a project', () => {
-  const pages = [
-    ...['aof', 'resp', 'expiry', 'cluster'].map((p, i) => page(`redis.test/${p}`, 'redis', { title: `Redis ${p}`, days: [dayOf(T0 + i * DAY_MS)], lastSeen: T0 + i * DAY_MS })),
-    ...['a', 'b', 'c', 'd'].map(p => page(`jobs.test/${p}`, 'jobs', { title: `Jobs ${p}`, days: [dayOf(T0)], lastSeen: T0 })),
-  ];
-  const projects = findProjects(pages);
-  assert(projects.length === 1 && projects[0].name === 'Redis' && projects[0].days === 4, JSON.stringify(projects.map(p => [p.name, p.days])));
-});
-
-test('a topic with too few pages is not a project', () => {
-  const pages = ['a', 'b', 'c'].map((p, i) => page(`r.test/${p}`, 'redis', { days: [dayOf(T0 + i * DAY_MS)] }));
-  assert(findProjects(pages).length === 0, 'three pages');
+  const t1 = trail(0, ['two-sum', 'three-sum'], 'redis');
+  const t2 = trail(1, ['two-sum/description', 'valid-anagram'], 'redis');
+  t2.pages[0].title = 'two-sum';
+  const [project] = findProjects([t1, t2]);
+  assert(project?.pages.length === 3, JSON.stringify(project?.pages.map(p => p.url)));
 });
 
 section('names, links and resurfacing');
@@ -149,11 +199,6 @@ test('names use the words titles share and skip filler and site names', () => {
 
 test('repeats some sites pile into a title are dropped', () => {
   assert(cleanTitle('Branch • Branch • Branch • Casual Ties - Google Gemini') === 'Branch • Casual Ties - Google Gemini', cleanTitle('Branch • Branch • Branch • Casual Ties - Google Gemini'));
-});
-
-test('pages with no vector are related only by an identical subcategory', () => {
-  assert(related({ category: 'Study', subcategory: 'Reference' }, { category: 'Study', subcategory: 'Reference' }), 'same');
-  assert(!related({ category: 'Study', subcategory: 'Reference' }, { category: 'Study', subcategory: 'Courses & Lectures' }), 'different');
 });
 
 test('resurfaces older related stash items, not new ones, unrelated ones or the same page', () => {
