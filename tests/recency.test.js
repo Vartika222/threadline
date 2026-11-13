@@ -3,7 +3,7 @@
  * Run with: node tests/recency.test.js
  */
 
-import { computeRecencyNorm, formatIdleDuration, RECENCY_CAP_MS } from '../src/ml/recency.js';
+import { computeRecencyNorm, formatIdleDuration, idleGroupIds, RECENCY_CAP_MS } from '../src/ml/recency.js';
 
 let passed = 0;
 let failed = 0;
@@ -65,6 +65,19 @@ test('5 minutes idle formats in minutes', () => {
 
 test('2 hours idle formats in hours', () => {
   assert(formatIdleDuration(NOW - 2 * 60 * 60 * 1000, NOW) === 'idle 2h');
+});
+
+test('only groups with no active tab and nothing touched in 30 minutes fold up', () => {
+  const old = NOW - RECENCY_CAP_MS - 1;
+  const ids = idleGroupIds([
+    { groupId: 1, active: false, lastAccessed: old },
+    { groupId: 2, active: true, lastAccessed: 0 },          // holds the active tab
+    { groupId: 3, active: false, lastAccessed: old },
+    { groupId: 3, active: false, lastAccessed: NOW - 10 },  // one recent tab keeps it open
+    { groupId: -1, active: false, lastAccessed: 0 },        // ungrouped
+    { groupId: 4, active: false },                          // no lastAccessed: left alone
+  ], NOW);
+  assert(JSON.stringify(ids) === '[1]', JSON.stringify(ids));
 });
 
 console.log(`\n${'─'.repeat(63)}`);
