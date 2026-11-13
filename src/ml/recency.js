@@ -32,6 +32,22 @@ export function computeRecencyNorm(lastActive, now = Date.now()) {
 }
 
 /**
+ * Groups to fold away: none of their tabs is active, and none was touched in idleMs.
+ * @param {{groupId:number, active:boolean, lastAccessed?:number}[]} tabs - chrome.tabs.query results
+ * @returns {number[]} group ids
+ */
+export function idleGroupIds(tabs, now = Date.now(), idleMs = RECENCY_CAP_MS) {
+  const latest = new Map();
+  for (const tab of tabs) {
+    if (tab.groupId === undefined || tab.groupId < 0) continue;
+    // A tab Chrome gives no lastAccessed for counts as fresh, so it never folds a group by mistake.
+    const at = tab.active ? Infinity : (tab.lastAccessed ?? now);
+    latest.set(tab.groupId, Math.max(latest.get(tab.groupId) ?? 0, at));
+  }
+  return [...latest].filter(([, at]) => now - at >= idleMs).map(([id]) => id);
+}
+
+/**
  * Human-readable "how long ago" string for tooltips.
  * @param {number} lastActive
  * @param {number} [now]

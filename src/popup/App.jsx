@@ -77,6 +77,8 @@ export default function App() {
   const [canUndo, setCanUndo] = useState(false);
   const [placements, setPlacements] = useState({});
   const [correctionNote, setCorrectionNote] = useState(null);
+  const [query, setQuery] = useState('');
+  const [found, setFound] = useState([]);
 
   useEffect(() => {
     loadTrainingExamples().then(examples => setExampleCount(examples.length));
@@ -106,6 +108,18 @@ export default function App() {
     events.forEach(e => e.addListener(refresh));
     return () => { clearTimeout(timer); events.forEach(e => e.removeListener(refresh)); };
   }, []);
+
+  // Search every window, not just this one: a lost tab is often in another window.
+  useEffect(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) { setFound([]); return; }
+    chrome.tabs.query({}).then(all => setFound(all.filter(t => `${t.title} ${t.url}`.toLowerCase().includes(q))));
+  }, [query, tabs]);
+
+  async function goToTab(tab) {
+    await chrome.tabs.update(tab.id, { active: true });
+    await chrome.windows.update(tab.windowId, { focused: true });
+  }
 
   async function loadTabs() {
     const response = await chrome.runtime.sendMessage({ type: 'GET_ALL_TABS' });
@@ -311,6 +325,28 @@ export default function App() {
 
         {view === 'idle' && page === 'tabs' && (
           <div className="idle-view">
+            <input
+              type="search"
+              className="tab-search"
+              placeholder="Find a tab by title or address"
+              aria-label="Find a tab"
+              value={query}
+              onChange={e => setQuery(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter' && found[0]) goToTab(found[0]); }}
+            />
+            {query.trim() && (
+              <div className="tab-list">
+                {found.length === 0 && <div className="notice">No open tab matches “{query.trim()}”.</div>}
+                {found.map(tab => (
+                  <button key={tab.id} className="tab-item" onClick={() => goToTab(tab)}>
+                    {tab.favIconUrl ? <img src={tab.favIconUrl} className="favicon" alt="" /> : <span className="favicon" />}
+                    <span className="tab-title">{tab.title || 'Untitled'}</span>
+                    <span className="tab-host">{(() => { try { return new URL(tab.url).hostname.replace(/^www\./, ''); } catch { return ''; } })()}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+            {!query.trim() && <>
             <SortButton onClick={handleSort} />
             <label className="auto-sort-toggle">
               <input type="checkbox" checked={autoSort} onChange={handleToggleAutoSort} />
@@ -346,6 +382,7 @@ export default function App() {
                 );
               })}
             </div>
+            </>}
           </div>
         )}
 

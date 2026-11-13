@@ -31,6 +31,7 @@ import { CATEGORY_NAMES, correctionKey } from './src/ml/categories.js';
 import { mergeExamples, countSources, RETRAIN_EVERY } from './src/ml/student.js';
 import { put, update, forgetBefore } from './src/memory/db.js';
 import { dayOf, DAY_MS } from './src/memory/memory.js';
+import { idleGroupIds } from './src/ml/recency.js';
 
 // ─── State Management ─────────────────────────────────────────────────────
 
@@ -260,12 +261,14 @@ chrome.runtime.onInstalled?.addListener(async () => {
   await syncStoreWithOpenTabs();
   await injectContentScriptIntoOpenTabs();
   scheduleAutoSort();
+  chrome.alarms.create(IDLE_GROUPS_ALARM, { periodInMinutes: 5 });
 });
 
 chrome.runtime.onStartup?.addListener(async () => {
   forgetOldMemory();
   await syncStoreWithOpenTabs();
   scheduleAutoSort();
+  chrome.alarms.create(IDLE_GROUPS_ALARM, { periodInMinutes: 5 });
 });
 
 // When a new tab is created, register it in our store
@@ -860,7 +863,19 @@ async function leaveBlockedPage(tabId) {
   return { ok: true };
 }
 
+// Tab groups you haven't touched in 30 minutes fold up on their own; clicking one opens it again.
+const IDLE_GROUPS_ALARM = 'idle_groups';
+
+async function collapseIdleGroups() {
+  const tabs = await chrome.tabs.query({});
+  for (const groupId of idleGroupIds(tabs)) {
+    const group = await chrome.tabGroups.get(groupId).catch(() => null);
+    if (group && !group.collapsed) await editTabs(() => chrome.tabGroups.update(groupId, { collapsed: true })).catch(() => {});
+  }
+}
+
 chrome.alarms.onAlarm.addListener(async ({ name }) => {
+  if (name === IDLE_GROUPS_ALARM) await collapseIdleGroups();
   if (name === FOCUS_END_ALARM) await endFocus();
   if (name === FOCUS_TICK_ALARM) {
     if (await loadFocus()) await showFocusBadge();
