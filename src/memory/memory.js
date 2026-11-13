@@ -85,43 +85,63 @@ export function buildSessions(visits) {
   return sessions;
 }
 
-/** Joins records into groups of related ones (single link): each group's items in their original order. */
-function groupRelated(items) {
-  const parent = items.map((_, i) => i);
-  const find = (i) => (parent[i] === i ? i : (parent[i] = find(parent[i])));
-  for (let i = 0; i < items.length; i++) {
-    for (let j = i + 1; j < items.length; j++) {
-      if (related(items[i], items[j])) parent[find(j)] = find(i);
+/**
+ * Groups related records. Each joins the group whose average it's most related to,
+ * or starts its own; comparing with the whole group, not any one member, stops
+ * a chain of loose links from pulling unrelated topics together.
+ */
+function cluster(items) {
+  const groups = [];
+  for (const item of items) {
+    let best = null;
+    let bestScore = -Infinity;
+    for (const group of groups) {
+      if (!item.vector || !group.centre) continue;
+      const score = dot(item.vector, group.centre);
+      if (related(item, { vector: group.centre, category: group.category }) && score > bestScore) { best = group; bestScore = score; }
     }
+    if (!best) groups.push(best = { items: [], sum: item.vector ? new Array(item.vector.length).fill(0) : null });
+    best.items.push(item);
+    if (best.sum) {
+      for (let i = 0; i < item.vector.length; i++) best.sum[i] += item.vector[i];
+      best.centre = normalise(best.sum);
+    }
+    best.category = majority(best.items.map(p => p.category));
   }
-  const groups = new Map();
-  items.forEach((item, i) => {
-    const root = find(i);
-    if (!groups.has(root)) groups.set(root, []);
-    groups.get(root).push(item);
-  });
-  return [...groups.values()];
+  return groups.map(g => g.items);
+}
+
+/** A tab title without the repeats some sites pile up: "Branch • Branch • Chat" → "Branch • Chat". */
+export function cleanTitle(title) {
+  return [...new Set((title || '').split(' • ').map(t => t.trim()).filter(Boolean))].join(' • ').slice(0, 120);
 }
 
 const STOP = new Set(('the and for with from your you this that what how why are was were has have its into about over more most our out new free best top '
   + 'home page login sign official site online watch video videos youtube google search wikipedia github reddit amazon linkedin '
   + 'com www http https part one two vs via using use guide tutorial').split(' '));
 
-/** A short name for a group of pages, from the words their titles share: "Redis Persistence". */
+/**
+ * A short name for a group of pages: the words most of their titles share ("Redis Persistence"),
+ * or, when they share none, the first title without its site name ("Grind 75").
+ * Put the most important title first.
+ */
 export function nameFor(titles) {
   const counts = new Map();
   for (const title of titles) {
-    for (const word of new Set(words(title))) {
-      if (word.length < 3 || STOP.has(word) || /^\d+$/.test(word)) continue;
+    for (const word of new Set(words(cleanTitle(title)))) {
+      if (word.length < 3 || STOP.has(word) || /\d/.test(word)) continue;
       counts.set(word, (counts.get(word) || 0) + 1);
     }
   }
+  const need = Math.max(2, Math.ceil(titles.length / 2));
+  const order = [...counts.keys()]; // first appearance, so ties read in title order
   const top = [...counts.entries()]
-    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-    .filter(([, n], i) => i === 0 || n > 1)
+    .filter(([, n]) => n >= need)
+    .sort((a, b) => b[1] - a[1] || order.indexOf(a[0]) - order.indexOf(b[0]))
     .slice(0, 2)
     .map(([w]) => w[0].toUpperCase() + w.slice(1));
-  return top.join(' ') || (titles[0] || 'Untitled').slice(0, 40);
+  const first = cleanTitle(titles[0]).split(/\s+[-|–—•:]\s+/)[0];
+  return top.join(' ') || first.slice(0, 40) || 'Untitled';
 }
 
 // Query values that name a different page (a search, a video, an item); everything else (tracking, sort, tab state) is ignored.
@@ -140,8 +160,8 @@ export function pageKey(url) {
 }
 
 /**
- * Trails: within each session, the visits that belong together. A trail needs
- * at least two pages or five minutes, so one quick look isn't a trail.
+ * Trails: within each session, the visits that belong together. A trail is a
+ * move between at least two pages; sitting on one page isn't a trail.
  * `pages` maps url → page record (for vectors and categories).
  */
 export function buildTrails(visits, pages) {
@@ -156,12 +176,12 @@ export function buildTrails(visits, pages) {
       entry.urls.add(visit.url);
       entry.ms += visit.ms;
       entry.last = visit.at;
-      entry.title = pages.get(visit.url)?.title || visit.title || entry.title;
+      entry.title = cleanTitle(pages.get(visit.url)?.title || visit.title || entry.title);
       byKey.set(key, entry);
     }
-    for (const group of groupRelated([...byKey.values()])) {
+    for (const group of cluster([...byKey.values()])) {
+      if (group.length < 2) continue;
       const ms = group.reduce((s, p) => s + p.ms, 0);
-      if (group.length < 2 && ms < 5 * 60 * 1000) continue;
       const ordered = [...group].sort((a, b) => a.first - b.first);
       const endsAt = [...group].sort((a, b) => b.last - a.last)[0];
       // The path you took through these pages, in order, with going back to a page kept as a step.
@@ -172,7 +192,7 @@ export function buildTrails(visits, pages) {
         if (page && steps.at(-1)?.key !== page.key) steps.push({ key: page.key, title: page.title, url: page.url, at: visit.at, back: steps.some(s => s.key === page.key) });
       }
       trails.push({
-        name: nameFor(group.map(p => p.title)),
+        name: nameFor([...group].sort((a, b) => b.ms - a.ms).map(p => p.title)),
         start: ordered[0].first,
         end: endsAt.last,
         ms,
@@ -185,6 +205,8 @@ export function buildTrails(visits, pages) {
   }
   return trails.sort((a, b) => b.start - a.start);
 }
+
+const hostOf = (url) => { try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return ''; } };
 
 function majority(values) {
   const counts = new Map();
@@ -204,31 +226,33 @@ function normalise(v) {
  * `timeByUrl` (optional) adds the time spent from visits.
  */
 export function findProjects(pages, { minPages = 4, minDays = 2, timeByUrl = new Map() } = {}) {
-  const groups = [];
-  const withVectors = pages.filter(p => p.vector).sort((a, b) => (a.firstSeen || 0) - (b.firstSeen || 0));
-  for (const page of withVectors) {
-    let best = null;
-    let bestScore = -Infinity;
-    for (const group of groups) {
-      const centre = { vector: group.centre, category: group.category };
-      const score = dot(page.vector, group.centre);
-      if (related(page, centre) && score > bestScore) { best = group; bestScore = score; }
+  // One entry per page: the same address, or the same title on the same site ("Two Sum - LeetCode" at /two-sum and /two-sum/description).
+  const merged = new Map();
+  for (const page of [...pages].sort((a, b) => (b.lastSeen || 0) - (a.lastSeen || 0))) {
+    const title = cleanTitle(page.title);
+    const keys = [pageKey(page.url), title && `${page.host || hostOf(page.url)}|${title.toLowerCase()}`].filter(Boolean);
+    const same = keys.map(k => merged.get(k)).find(Boolean);
+    if (same) {
+      same.days = [...new Set([...(same.days || []), ...(page.days || [])])];
+      same.firstSeen = Math.min(same.firstSeen || Infinity, page.firstSeen || Infinity);
+      same.ms += timeByUrl.get(page.url) || 0;
+      keys.forEach(k => merged.set(k, same));
+    } else {
+      const entry = { ...page, title, ms: timeByUrl.get(page.url) || 0 };
+      keys.forEach(k => merged.set(k, entry));
     }
-    if (!best) groups.push(best = { pages: [], sum: new Array(page.vector.length).fill(0) });
-    best.pages.push(page);
-    for (let i = 0; i < page.vector.length; i++) best.sum[i] += page.vector[i];
-    best.centre = normalise(best.sum);
-    best.category = majority(best.pages.map(p => p.category));
   }
+  const unique = [...new Set(merged.values())].filter(p => p.vector).sort((a, b) => (a.firstSeen || 0) - (b.firstSeen || 0));
+  const groups = cluster(unique).map(items => ({ pages: items, category: majority(items.map(p => p.category)) }));
   return groups
     .map(group => {
       const days = new Set(group.pages.flatMap(p => p.days || [dayOf(p.lastSeen || p.firstSeen || 0)]));
       return {
-        name: nameFor(group.pages.map(p => p.title)),
+        name: nameFor([...group.pages].sort((a, b) => b.ms - a.ms).map(p => p.title)),
         category: group.category,
         days: days.size,
         lastSeen: Math.max(...group.pages.map(p => p.lastSeen || 0)),
-        ms: group.pages.reduce((s, p) => s + (timeByUrl.get(p.url) || 0), 0),
+        ms: group.pages.reduce((s, p) => s + p.ms, 0),
         pages: [...group.pages].sort((a, b) => (b.lastSeen || 0) - (a.lastSeen || 0))
           .map(({ url, title, host, category }) => ({ url, title, host, category })),
       };

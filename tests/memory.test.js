@@ -5,7 +5,7 @@
  */
 import { makeRunner, assert } from './helpers/chromeMock.js';
 import {
-  search, buildSessions, buildTrails, findProjects, nameFor, resurface, related, dayOf, pageKey,
+  search, buildSessions, buildTrails, findProjects, nameFor, resurface, related, dayOf, pageKey, cleanTitle,
   DAY_MS, SESSION_GAP_MS, VISIT_CAP_MS,
 } from '../src/memory/memory.js';
 
@@ -94,7 +94,35 @@ test('page keys keep what names a page and drop tracking', () => {
   assert(pageKey('https://www.google.com/search?q=redis&sca=1') !== pageKey('https://www.google.com/search?q=kafka'), 'different searches');
 });
 
+test('one page, however long, is not a trail', () => {
+  const pages = new Map([['g', { url: 'g', title: 'Branch • Branch • Chat - Google Gemini', vector: near('redis') }]]);
+  assert(buildTrails([{ url: 'g', at: T0 }, { away: true, at: T0 + 25 * MIN }], pages).length === 0, 'no trail');
+});
+
+test('a loose chain of links does not pull different topics into one trail', () => {
+  // The bridge page is linked to both topics on its own, so single-link grouping would chain them.
+  const mix = (a, b) => { const v = near(a).map((x, i) => 0.6 * x + 0.4 * near(b)[i]); const n = Math.hypot(...v); return v.map(x => x / n); };
+  const pages = new Map([
+    ['r1', { title: 'Redis persistence', vector: near('redis') }], ['r2', { title: 'Redis protocol', vector: near('redis') }],
+    ['x', { title: 'Bridge', vector: mix('redis', 'jobs') }],
+    ['j1', { title: 'Stripe careers', vector: near('jobs') }], ['j2', { title: 'Greenhouse careers', vector: near('jobs') }],
+  ]);
+  const visits = ['r1', 'r2', 'x', 'j1', 'j2'].map((url, i) => ({ url, at: T0 + i * 3 * MIN }));
+  visits.push({ away: true, at: T0 + 15 * MIN });
+  const trails = buildTrails(visits, pages);
+  assert(trails.map(t => t.pages.length).sort().join() === '2,3', trails.map(t => t.pages.length).join());
+});
+
 section('projects');
+
+test('the same page at two addresses is one page in a project', () => {
+  const pages = ['two-sum', 'two-sum/description', 'three-sum', 'valid-anagram', 'group-anagrams'].map((p, i) => ({
+    ...page(`leetcode.com/problems/${p}`, 'redis', { title: `${p.startsWith('two-sum') ? 'Two Sum' : p} - LeetCode`, days: [dayOf(T0 + i * DAY_MS)], lastSeen: T0 + i * DAY_MS }),
+    host: 'leetcode.com',
+  }));
+  const [project] = findProjects(pages);
+  assert(project.pages.length === 4 && project.days === 5, JSON.stringify(project.pages.map(p => p.url)));
+});
 
 test('pages that keep coming back over several days become a project', () => {
   const pages = [
@@ -115,6 +143,12 @@ section('names, links and resurfacing');
 test('names use the words titles share and skip filler and site names', () => {
   assert(nameFor(['Redis persistence - YouTube', 'Redis persistence explained', 'How Redis works']) === 'Redis Persistence', nameFor(['Redis persistence - YouTube', 'Redis persistence explained', 'How Redis works']));
   assert(nameFor(['Home']) === 'Home', 'falls back to the title');
+  const grind = nameFor(['Grind 75 - A better Blind 75 you can customize, by the author of Blind 75']);
+  assert(grind === 'Grind 75', grind);
+});
+
+test('repeats some sites pile into a title are dropped', () => {
+  assert(cleanTitle('Branch • Branch • Branch • Casual Ties - Google Gemini') === 'Branch • Casual Ties - Google Gemini', cleanTitle('Branch • Branch • Branch • Casual Ties - Google Gemini'));
 });
 
 test('pages with no vector are related only by an identical subcategory', () => {

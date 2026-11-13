@@ -8,7 +8,7 @@
  */
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { getAll, remove, visitsSince, forgetSite, forgetVisits, eraseAll } from './db.js';
-import { search, buildTrails, findProjects, buildSessions, dayOf, DAY_MS } from './memory.js';
+import { search, buildTrails, findProjects, buildSessions, dayOf, DAY_MS, pageKey, cleanTitle } from './memory.js';
 import { embedTexts } from '../ml/embedder.js';
 import { squirrelSvg } from '../popup/squirrel.js';
 
@@ -54,9 +54,16 @@ async function openUrl(url, openTabs) {
   }
 }
 
-/** Opens pages in a new window, in one tab group with this name. */
+/** Opens pages in a new window, in one tab group with this name. Pages already open in a tab aren't opened twice. */
 async function openTogether(name, urls) {
-  const win = await chrome.windows.create({ url: urls, focused: true });
+  const open = new Map((await chrome.tabs.query({})).map(t => [pageKey(t.url), t]));
+  const missing = [...new Map(urls.map(u => [pageKey(u), u])).values()].filter(u => !open.has(pageKey(u)));
+  if (missing.length === 0) {
+    const tab = open.get(pageKey(urls[0]));
+    if (tab) await openUrl(tab.url, new Map([[tab.url, tab]]));
+    return;
+  }
+  const win = await chrome.windows.create({ url: missing, focused: true });
   const tabIds = win.tabs.map(t => t.id);
   const groupId = await chrome.tabs.group({ tabIds, createProperties: { windowId: win.id } });
   await chrome.tabGroups.update(groupId, { title: name.slice(0, 40), color: 'grey' });
@@ -81,7 +88,7 @@ export default function MemoryApp() {
       getAll('pages'), getAll('stash'), visitsSince(Date.now() - 30 * DAY_MS), chrome.tabs.query({}),
       chrome.storage.local.get(PAUSED_KEY),
     ]);
-    setPages(p || []);
+    setPages((p || []).map(page => ({ ...page, title: cleanTitle(page.title) })));
     setStash((s || []).sort((a, b) => b.savedAt - a.savedAt));
     setVisits(v || []);
     setOpenTabs(new Map(tabs.map(t => [t.url.split('#')[0], t])));
