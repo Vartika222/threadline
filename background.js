@@ -1226,6 +1226,36 @@ function recordVisit(tab) {
   })().catch(fail('Could not record a visit'));
 }
 
+// ─── Links you followed ───────────────────────────────────────────────────
+// Trails join pages more easily when you went from one to the other by a link:
+// a link clicked in the same tab, or a tab opened from another one. Kept per tab
+// in session storage, because the service worker sleeps between clicks.
+const navKey = (tabId) => `nav_${tabId}`;
+const LINK_TRANSITIONS = new Set(['link', 'form_submit']);
+
+chrome.tabs.onCreated.addListener(async (tab) => {
+  if (tab.openerTabId === undefined) return;
+  const opener = await chrome.tabs.get(tab.openerTabId).catch(() => null);
+  if (opener?.url) await chrome.storage.session.set({ [navKey(tab.id)]: { opener: withoutHash(opener.url) } });
+});
+chrome.tabs.onRemoved.addListener((tabId) => { chrome.storage.session.remove(navKey(tabId)).catch(() => {}); });
+
+chrome.webNavigation?.onCommitted.addListener(async ({ tabId, frameId, url, transitionType }) => {
+  if (frameId !== 0) return;
+  const key = navKey(tabId);
+  const { [key]: nav = {} } = await chrome.storage.session.get(key);
+  await chrome.storage.session.set({ [key]: { last: withoutHash(url) } }); // the opener only counts for the tab's first page
+  const from = LINK_TRANSITIONS.has(transitionType) ? (nav.last || nav.opener) : null;
+  await recordLink(tabId, from, url).catch(fail('Could not record a link'));
+});
+
+async function recordLink(tabId, from, url) {
+  if (!from || !/^https?:/.test(from) || withoutHash(from) === withoutHash(url)) return;
+  const tab = await chrome.tabs.get(tabId).catch(() => null);
+  if (!tab || !(await memoryAllows({ ...tab, url })) || !(await memoryAllows({ ...tab, url: from }))) return;
+  await put('visits', { link: true, from, url: withoutHash(url), at: Date.now() });
+}
+
 function recordAway() {
   lastVisitUrl = null;
   put('visits', { away: true, at: Date.now() }).catch(fail('Could not record time away'));
